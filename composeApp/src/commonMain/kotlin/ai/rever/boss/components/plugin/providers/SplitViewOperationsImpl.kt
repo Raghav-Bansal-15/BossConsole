@@ -10,6 +10,7 @@ import ai.rever.boss.plugin.api.TabsComponent
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabType
 import ai.rever.boss.plugin.workspace.LayoutWorkspace
+import ai.rever.boss.utils.DeepLinkHandler
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import ai.rever.boss.window.WindowProjectStateRegistry
@@ -35,6 +36,7 @@ class SplitViewOperationsImpl(
         title: String,
         forceNewTab: Boolean,
     ) {
+        if (routePluginDeepLink(url, DeepLinkHandler::processDeepLink)) return
         splitViewState.openUrlInActivePanel(url, title, forceNewTab)
     }
 
@@ -49,7 +51,7 @@ class SplitViewOperationsImpl(
         filePath: String,
         fileName: String,
     ) {
-        splitViewState.openUrlInActivePanel(SplitViewState.toFileUrl(filePath), fileName)
+        splitViewState.openFileInBrowserTab(filePath, fileName)
     }
 
     override fun openFileInEditor(
@@ -270,4 +272,14 @@ private class TabsComponentWrapper(
             )
         bossTabsComponent.addTab(terminalTabInfo)
     }
+}
+
+/** Keep host links inside the process that received the plugin request. */
+internal fun routePluginDeepLink(
+    url: String,
+    dispatch: (String) -> Unit,
+): Boolean {
+    if (!url.startsWith("boss://", ignoreCase = true)) return false
+    dispatch(url)
+    return true
 }

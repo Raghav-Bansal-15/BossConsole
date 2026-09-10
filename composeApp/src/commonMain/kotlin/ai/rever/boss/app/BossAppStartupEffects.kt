@@ -134,6 +134,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
         PanelComponentStoreRegistry.register(windowId, state.panelComponentStore)
         onDispose {
             PanelComponentStoreRegistry.unregister(windowId)
+            state.panelComponentStore.dispose()
         }
     }
 
@@ -452,10 +453,13 @@ internal fun BossAppStartupEffects(state: BossAppState) {
             // NOTE: the "Last Session" write is NOT here. It is app-level, not
             // per-window (#19), and lives in the windowId-keyed lifecycle effect
             // above via LastSessionCoordinator.
-
+            // Keep these calls in the SAME disposal callback. Compose forgets sibling
+            // effects in reverse order, so the earlier store effect runs after this one.
+            // Panels must release resources before this window's plugin classloaders close,
+            // during window teardown. Store disposal is idempotent.
+            state.panelComponentStore.dispose()
             // Cleanup plugin coroutines
             plugin.dispose()
-
             // NOTE: the updater is NOT torn down here. It is process-wide; the
             // first window to close used to cancel periodic checks and in-flight
             // downloads for every window still open (#19, #37). This window's
@@ -464,7 +468,6 @@ internal fun BossAppStartupEffects(state: BossAppState) {
 
             // Unregister this window's state from the global registries
             SplitViewStateRegistry.unregister(windowId)
-            PanelComponentStoreRegistry.unregister(windowId)
             WindowProjectStateRegistry.unregister(windowId)
             WindowRunnerStateRegistry.unregister(windowId)
             WindowGitStateRegistry.unregister(windowId)

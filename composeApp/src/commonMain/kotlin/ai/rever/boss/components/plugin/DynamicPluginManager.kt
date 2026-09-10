@@ -1869,6 +1869,20 @@ class DynamicPluginManager(
         }
     }
 
+    private fun refuseHotReload(info: DynamicPluginInfo): Result<DynamicPluginInfo> {
+        val pluginId = info.manifest.pluginId
+        logger.info(
+            LogCategory.SYSTEM,
+            "Refusing to hot-reload - this plugin owns a native surface, restart BOSS instead",
+            mapOf("pluginId" to pluginId),
+        )
+        return Result.failure(
+            IllegalStateException(
+                "${info.manifest.displayName} cannot be hot-reloaded - restart BOSS to reload it",
+            ),
+        )
+    }
+
     /**
      * Reload a plugin from the newest known JAR, preserving its enabled state.
      *
@@ -1879,6 +1893,16 @@ class DynamicPluginManager(
         val info =
             getPluginInfo(pluginId)
                 ?: return Result.failure(Exception("Plugin not found: $pluginId"))
+
+        // This plugin owns a native OS peer bound to the classloader that created it - force-
+        // unloading that loader (which this menu action does, same as any other reload) leaves
+        // every open surface unable to attach a view (BossConsole#71). Any update it needs has
+        // already been staged for the next restart by the update path itself; reloading the
+        // SAME bytes here gains nothing and only breaks the tabs it is currently showing.
+        if (info.state == PluginState.LOADED && HotReloadPolicy.requiresRestartInsteadOfHotReload(pluginId)) {
+            return refuseHotReload(info)
+        }
+
         val wasEnabled = info.enabled
 
         // Resolve against the DISK before unloading, never straight from the loaded record. A
@@ -2138,6 +2162,9 @@ class DynamicPluginManager(
      *
      * Bundled plugins are system plugins that ship with BossConsole.
      * They are loaded in priority order (lower loadPriority values load first).
+     *
+     * This helper does not establish provenance from the directory argument. Production startup
+     * binds trusted copies through PluginStoreSetup; unsigned, unbound files still fail enforcement.
      *
      * @param bundledDir Directory containing bundled plugin JARs
      * @return Map of plugin IDs to their load results
