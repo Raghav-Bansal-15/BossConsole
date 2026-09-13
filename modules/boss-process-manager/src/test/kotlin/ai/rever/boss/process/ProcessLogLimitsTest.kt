@@ -1,6 +1,7 @@
 package ai.rever.boss.process
 
 import java.io.File
+import java.io.FilterInputStream
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -67,23 +68,42 @@ class ProcessLogLimitsTest {
     @Test
     fun `native writer failures still drain all child output without retrying recording`() {
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        val classes = File(LogTestProcess::class.java.protectionDomain.codeSource.location.toURI()).absolutePath
+        val classes =
+            File(
+                LogTestProcess::class.java.protectionDomain.codeSource.location
+                    .toURI(),
+            ).absolutePath
         for (failure in listOf(IOException("disk"), IllegalArgumentException("permissions"), UnsatisfiedLinkError("symbol"))) {
             val process = ProcessBuilder(java, "-cp", classes, LogTestProcess::class.java.name).start()
             try {
                 var attempts = 0
-                val drain = CompletableFuture.runAsync {
-                    process.inputStream.use { input ->
-                        drainProcessOutput(input) { _, _ ->
-                            attempts++
-                            throw failure
+                var drainedBytes = 0L
+                val drain =
+                    CompletableFuture.runAsync {
+                        val counting =
+                            object : FilterInputStream(process.inputStream) {
+                                override fun read(
+                                    bytes: ByteArray,
+                                    offset: Int,
+                                    length: Int,
+                                ): Int {
+                                    val count = super.read(bytes, offset, length)
+                                    if (count > 0) drainedBytes += count
+                                    return count
+                                }
+                            }
+                        counting.use { input ->
+                            drainProcessOutput(input) { _, _ ->
+                                attempts++
+                                throw failure
+                            }
                         }
                     }
-                }
                 assertTrue(process.waitFor(30, TimeUnit.SECONDS))
                 drain.get(10, TimeUnit.SECONDS)
                 assertEquals(0, process.exitValue())
                 assertEquals(1, attempts)
+                assertEquals(60L * 1024 * 1024 + 3, drainedBytes)
                 assertEquals("error-stream", process.errorStream.bufferedReader().readText())
             } finally {
                 process.destroyForcibly()
