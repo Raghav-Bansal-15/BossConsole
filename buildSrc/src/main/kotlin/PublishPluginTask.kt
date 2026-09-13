@@ -148,7 +148,7 @@ abstract class PublishPluginTask : DefaultTask() {
         }
         val metadata = if (pluginMetadata is Map<*, *>) pluginMetadata else emptyMap<String, String>()
         val minimumVersion = metadata["minBossVersion"]?.let {
-            require(it is String && it.isNotBlank()) { "Invalid minBossVersion in plugin metadata" }
+            if (it !is String || it.isBlank()) throw GradleException("Invalid minBossVersion in plugin metadata")
             it
         } ?: "1.0.0"
 
@@ -185,8 +185,8 @@ abstract class PublishPluginTask : DefaultTask() {
                 )
 
         val apiKey = anonKey.orNull ?: System.getenv("SUPABASE_ANON_KEY") ?: ""
-        require(token.isNotBlank() && listOf(token, apiKey).none { '\r' in it || '\n' in it }) {
-            "Invalid publishing credentials"
+        if (token.isBlank() || listOf(token, apiKey).any { '\r' in it || '\n' in it }) {
+            throw GradleException("Invalid publishing credentials")
         }
 
         // Step 1: Check if plugin exists
@@ -202,7 +202,7 @@ abstract class PublishPluginTask : DefaultTask() {
                 displayName = actualDisplayName,
                 description = pluginDescription.orNull ?: "",
                 authorName = authorName.orNull,
-                homepageUrl = homepageUrl.orNull ?: (metadata["homepageUrl"] as? String) ?: manifest["Plugin-Url"]
+                homepageUrl = homepageUrl.orNull ?: (metadata["url"] as? String) ?: (metadata["homepageUrl"] as? String) ?: manifest["Plugin-Url"]
                     ?: throw GradleException("Set homepageUrl when creating a new plugin"),
                 tags = tags.orNull?.split(",")?.map { it.trim() } ?: emptyList(),
                 token = token,
@@ -435,7 +435,7 @@ abstract class PublishPluginTask : DefaultTask() {
         val body =
             inputStream?.use { stream ->
                 val bytes = stream.readNBytes(1024 * 1024 + 1)
-                require(bytes.size <= 1024 * 1024) { "Publishing response exceeds the size limit" }
+                if (bytes.size > 1024 * 1024) throw GradleException("Publishing response exceeds the size limit")
                 bytes.toString(StandardCharsets.UTF_8)
             } ?: ""
 
@@ -457,10 +457,10 @@ abstract class PublishPluginTask : DefaultTask() {
     private fun publishingConnection(rawUrl: String): HttpURLConnection {
         val url = URL(rawUrl)
         val local = url.host in setOf("localhost", "127.0.0.1", "[::1]")
-        require(url.protocol == "https" || (url.protocol == "http" && local)) {
-            "Publishing requires HTTPS except for local development"
+        if (url.protocol != "https" && !(url.protocol == "http" && local)) {
+            throw GradleException("Publishing requires HTTPS except for local development")
         }
-        require(url.userInfo == null && url.ref == null) { "Invalid publishing URL" }
+        if (url.userInfo != null || url.ref != null) throw GradleException("Invalid publishing URL")
         return (url.openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = false
             connectTimeout = 30_000

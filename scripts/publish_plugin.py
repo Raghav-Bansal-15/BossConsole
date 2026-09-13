@@ -130,7 +130,7 @@ def publish(args):
     print("Checking plugin entry...")
     status, _ = api_request("GET", plugin_url, token, anon_key)
     if status == 404:
-        homepage = args.homepage_url or metadata.get("homepageUrl") or manifest.get("Plugin-Url")
+        homepage = args.homepage_url or metadata.get("url") or metadata.get("homepageUrl") or manifest.get("Plugin-Url")
         homepage = nonempty_string(homepage, "homepage URL; provide --homepage-url for a new plugin")
         payload = {
             "pluginId": plugin_id,

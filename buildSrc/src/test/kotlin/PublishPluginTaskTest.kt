@@ -102,6 +102,14 @@ class PublishPluginTaskTest {
             assertFalse(refused.output.contains(token))
             assertTrue(refused.output.contains("HTTP 403"))
             assertEquals(1, requests.size)
+
+            requests.clear()
+            val buildFile = directory.resolve("build.gradle")
+            buildFile.writeText(buildFile.readText().replace(base, "http://store.invalid"))
+            val insecure = runner.buildAndFail()
+            assertTrue(insecure.output.contains("Publishing requires HTTPS except for local development"))
+            assertFalse(insecure.output.contains(token))
+            assertTrue(requests.isEmpty())
         } finally {
             server.stop(0)
             directory.deleteRecursively()

@@ -43,7 +43,7 @@
     .\publish-plugin.ps1 -JarPath "my-plugin.jar"
 #>
 
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding=$false)]
 param(
     [Parameter(Mandatory=$true, Position=0)]
     [string]$JarPath,
