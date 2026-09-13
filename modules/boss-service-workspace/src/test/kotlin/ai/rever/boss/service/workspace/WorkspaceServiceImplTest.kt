@@ -27,7 +27,11 @@ class WorkspaceServiceImplTest {
             val root = temporary.newFolder("workspaces")
             val service = WorkspaceServiceImpl(root)
             service.saveWorkspace(
-                SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").setName("Committed").build(),
+                SaveWorkspaceRequest
+                    .newBuilder()
+                    .setWorkspaceId("safe")
+                    .setName("Committed")
+                    .build(),
             )
             service.loadWorkspace(LoadWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
             val before = service.getCurrentWorkspace(Empty.getDefaultInstance())
@@ -42,7 +46,11 @@ class WorkspaceServiceImplTest {
 
             assertFailsWith<IOException> {
                 service.saveWorkspace(
-                    SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").setName("Uncommitted").build(),
+                    SaveWorkspaceRequest
+                        .newBuilder()
+                        .setWorkspaceId("safe")
+                        .setName("Uncommitted")
+                        .build(),
                 )
             }
             assertFailsWith<IOException> {
@@ -61,7 +69,11 @@ class WorkspaceServiceImplTest {
             assertTrue(record.delete())
             Files.move(backup.toPath(), record.toPath())
             service.saveWorkspace(
-                SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").setName("Retried").build(),
+                SaveWorkspaceRequest
+                    .newBuilder()
+                    .setWorkspaceId("safe")
+                    .setName("Retried")
+                    .build(),
             )
             assertEquals(
                 "Retried",
