@@ -24,13 +24,14 @@ class PluginDownloadCache(
     private val logger = BossLogger.forComponent("PluginDownloadCache")
 
     // Resolve the host-supplied root once, including intentional host directory links.
-    // Defer I/O so an unavailable cache cannot prevent repository construction.
-    private val location by lazy {
-        val path = Files.createDirectories(cacheDir.toPath()).toRealPath()
-        path to Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey()
-    }
-    private val root: Path get() = location.first
-    private val rootIdentity: Any? get() = location.second
+    // Retain initialization failure so it cannot prevent repository construction.
+    private val location =
+        runCatching {
+            val path = Files.createDirectories(cacheDir.toPath()).toRealPath()
+            path to Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey()
+        }
+    private val root: Path get() = location.getOrThrow().first
+    private val rootIdentity: Any? get() = location.getOrThrow().second
 
     @Serializable
     private data class CacheMetadata(
