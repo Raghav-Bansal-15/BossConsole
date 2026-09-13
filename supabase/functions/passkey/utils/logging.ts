@@ -6,8 +6,10 @@ export function authFailureDetails(error: unknown): { failed: boolean; code?: st
   const details: { failed: boolean; code?: string; status?: number } = { failed: error != null };
   if (error === null || typeof error !== "object") return details;
   if ("code" in error && typeof error.code === "string") {
-    const knownCodes = new Set(["23505", "23503", "42501", "42P10", "42703", "PGRST116", "PGRST204"]);
-    if (knownCodes.has(error.code)) details.code = error.code;
+    const knownCodes = new Set(["23505", "23503", "42501", "42P10", "42703", "PGRST116", "PGRST204",
+      "PGRST301", "PGRST202", "22P02", "40001", "57014", "otp_expired",
+      "invalid_credentials", "over_request_rate_limit", "unexpected_failure"]);
+    details.code = knownCodes.has(error.code) ? error.code : "unlisted";
   }
   if ("status" in error && typeof error.status === "number" && Number.isInteger(error.status)) {
     if (error.status >= 100 && error.status <= 599) details.status = error.status;

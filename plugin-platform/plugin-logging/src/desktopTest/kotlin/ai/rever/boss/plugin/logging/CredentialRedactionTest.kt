@@ -30,4 +30,26 @@ class CredentialRedactionTest {
             assertTrue(message.contains("exit_code=1"))
         }
     }
+
+    @Test
+    fun passkeyPageParametersDoNotExposeCredentials() {
+        val url =
+            "https://example.com/passkey/auth/mobile?challenge=CHALLENGE&email=user%40example.com&" +
+                "sessionId=SESSION&credentialId=CREDENTIAL&rpId=example.com"
+        assertEquals(
+            "https://example.com/passkey/auth/mobile?challenge=[REDACTED]&email=[REDACTED]&" +
+                "sessionId=[REDACTED]&credentialId=[REDACTED]&rpId=example.com",
+            LogSanitizer.maskUriParams(url),
+        )
+    }
+
+    @Test
+    fun prefixedAndSeparatedSessionNamesAreRedacted() {
+        for (name in listOf("crossDeviceSessionId", "authSessionId", "session-id", "session.id")) {
+            assertEquals("[REDACTED]", LogSanitizer.sanitizeMap(mapOf(name to "short"))[name])
+            assertEquals("$name=[REDACTED]", LogSanitizer.sanitizeExceptionMessage("$name=short"))
+            assertFalse(LogSanitizer.sanitizeStackTrace("Exception: $name=short").contains("short"))
+        }
+        assertEquals("session_status=active", LogSanitizer.sanitizeExceptionMessage("session_status=active"))
+    }
 }

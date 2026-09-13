@@ -89,3 +89,14 @@ Deno.test("service error wrappers omit exception messages and preserve safe diag
   assert(output.includes("23505"));
   assert(output.includes("409"));
 });
+
+Deno.test("production challenge failures retain known codes and omit arbitrary codes", async () => {
+  for (const code of ["23505", "40001", "otp_expired", refreshToken]) {
+    const output = await capture(async () => {
+      const result = await storeChallenge(client([{ body: { code, message: refreshToken }, status: 409 }]),
+        challenge, ChallengeType.Authentication, { sessionId });
+      assertEquals(result.success, false);
+    });
+    assert(output.includes(code === refreshToken ? "unlisted" : code));
+  }
+});

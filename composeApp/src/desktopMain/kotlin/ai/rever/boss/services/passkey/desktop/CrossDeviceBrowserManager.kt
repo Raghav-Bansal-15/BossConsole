@@ -15,6 +15,7 @@ import kotlinx.coroutines.withContext
  * Handles JxBrowser WebAuthn operations and fallback browser launching
  */
 class CrossDeviceBrowserManager {
+    // Keep raw throwables out of auth logs: their messages can contain the credential URL.
     private val logger = BossLogger.forComponent("CrossDeviceBrowserManager")
 
     // Volatile because initialization moved out of the constructor. These are now

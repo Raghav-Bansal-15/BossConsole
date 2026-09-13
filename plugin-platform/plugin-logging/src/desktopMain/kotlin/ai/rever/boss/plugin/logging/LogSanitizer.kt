@@ -334,6 +334,10 @@ object LogSanitizer {
             "error_description",
             "id_token",
             "session_token",
+            "challenge",
+            "email",
+            "credentialId",
+            "credential_id",
             "sessionId",
             "session_id",
             "api_key",
@@ -408,7 +412,7 @@ object LogSanitizer {
 
         return map.mapValues { (key, value) ->
             when {
-                sensitiveValueNames.any { key.contains(it, ignoreCase = true) } -> "[REDACTED]"
+                sensitiveValueNames.any { key.contains(it, ignoreCase = true) } || nameMarksSecret(key) -> "[REDACTED]"
                 value is String && looksLikeSecret(value) -> maskToken(value)
                 else -> value
             }
@@ -428,14 +432,16 @@ object LogSanitizer {
      *
      * The multi-word entries of [sensitiveValueNames] ("access_token",
      * "credential_id", ...) can never equal a single word; their "token", "key"
-     * and "credential" words do, so nothing is left uncovered.
+     * and "credential" words do. Session IDs are matched as adjacent words so
+     * prefixed and separator-delimited names retain the same protection.
      */
     private fun nameMarksSecret(name: String): Boolean {
-        val normalized = name.replace(camelCaseBoundary, "_")
-        return normalized.equals("session_id", ignoreCase = true) ||
-            normalized.split('_', '-', '.').any { word ->
-                word.isNotEmpty() && sensitiveValueNames.any { word.equals(it, ignoreCase = true) }
-            }
+        val words = name.replace(camelCaseBoundary, "_").split('_', '-', '.')
+        return words.any { word ->
+            word.isNotEmpty() && sensitiveValueNames.any { word.equals(it, ignoreCase = true) }
+        } || words.zipWithNext().any { (first, second) ->
+            first.equals("session", ignoreCase = true) && second.equals("id", ignoreCase = true)
+        }
     }
 
     /**
