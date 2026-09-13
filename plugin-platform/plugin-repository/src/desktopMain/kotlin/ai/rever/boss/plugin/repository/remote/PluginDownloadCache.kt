@@ -36,7 +36,7 @@ class PluginDownloadCache(
         expectedSha256: String,
     ): File? {
         val path = cacheFile(pluginId, version)
-        if (!Files.isRegularFile(path, NOFOLLOW_LINKS)) return null
+        if (!Files.isRegularFile(path, NOFOLLOW_LINKS) || readMetadata(path) == null) return null
         val digest = MessageDigest.getInstance("SHA-256")
         Files.newByteChannel(path, setOf(READ, NOFOLLOW_LINKS)).use { channel ->
             Channels.newInputStream(channel).use { input ->

@@ -73,6 +73,30 @@ class PluginDownloadCacheTest {
     }
 
     @Test
+    fun lookupRequiresMatchingRegularIdentityMetadata() {
+        val cache = PluginDownloadCache(File(temporary, "cache"))
+        val source = File(temporary, "source.jar").also { it.writeText("jar") }
+        val cached = cache.cacheJar("plugin", "1.0.0", source)
+        val metadata = File(cached.parentFile, cached.nameWithoutExtension + ".json")
+        val original = metadata.readText()
+        metadata.writeText("""{"pluginId":"other-plugin","version":"1.0.0"}""")
+        assertNull(cache.getCachedJar("plugin", "1.0.0", hash(source)))
+        metadata.writeText("""{"pluginId":"plugin","version":"2.0.0"}""")
+        assertNull(cache.getCachedJar("plugin", "1.0.0", hash(source)))
+        metadata.writeText("invalid JSON")
+        assertNull(cache.getCachedJar("plugin", "1.0.0", hash(source)))
+        metadata.delete()
+        assertNull(cache.getCachedJar("plugin", "1.0.0", hash(source)))
+        val outside = File(temporary, "outside.json").also { it.writeText(original) }
+        Files.createSymbolicLink(metadata.toPath(), outside.toPath())
+        assertNull(cache.getCachedJar("plugin", "1.0.0", hash(source)))
+        Files.delete(metadata.toPath())
+        metadata.writeText(original)
+        assertNotNull(cache.getCachedJar("plugin", "1.0.0", hash(source)))
+        assertEquals(original, outside.readText())
+    }
+
+    @Test
     fun acceptsLongIdsThatFitTheOriginalStoreContract() {
         val cache = PluginDownloadCache(File(temporary, "cache"))
         val source = File(temporary, "source.jar").also { it.writeText("jar") }
