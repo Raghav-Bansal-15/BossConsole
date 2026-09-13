@@ -3,6 +3,7 @@ package ai.rever.boss.app.terminal
 import ai.rever.boss.ipc.proto.Empty
 import ai.rever.boss.ipc.proto.services.CloseSessionRequest
 import ai.rever.boss.ipc.proto.services.CreateSessionRequest
+import ai.rever.boss.ipc.proto.services.ResizeRequest
 import ai.rever.boss.ipc.proto.services.SendInputRequest
 import ai.rever.boss.ipc.proto.services.StreamOutputRequest
 import ai.rever.boss.ipc.proto.services.TerminalServiceGrpcKt
@@ -223,8 +224,47 @@ class TerminalLimitsTest {
                 val id = start("wait")
                 service.close()
                 awaitExit(id)
-                assertFailsWith<IllegalStateException> { service.createSession(request("echo")) }
+                assertEquals(
+                    Status.Code.UNAVAILABLE,
+                    assertFailsWith<StatusException> { stub.createSession(request("echo")) }.status.code,
+                )
                 Unit
+            }
+        }
+
+    @Test
+    fun `an exited shell releases capacity while a descendant still holds stdout`() =
+        runBlocking {
+            try {
+                withTimeout(5_000) {
+                    val id = start("background")
+                    awaitExit(id)
+                    val descendant = ProcessHandle.of(Files.readString(root.resolve("descendant.pid")).toLong()).orElseThrow()
+                    assertTrue(descendant.isAlive)
+                    assertTrue(stub.streamOutput(stream(id)).toList().last().isExit)
+                    val replacement = start("echo")
+                    assertTrue(stub.streamOutput(stream(replacement)).toList().last().isExit)
+                }
+            } finally {
+                val pid = root.resolve("descendant.pid")
+                if (Files.exists(pid)) ProcessHandle.of(Files.readString(pid).toLong()).ifPresent { it.destroyForcibly() }
+            }
+        }
+
+    @Test
+    fun `invalid launch input and resize limits return actionable grpc statuses`() =
+        runBlocking {
+            withTimeout(10_000) {
+                val oversized = request("echo").toBuilder().putEnvironment("LARGE", "x".repeat(131_072)).build()
+                val dimensions = request("echo").toBuilder().setCols(1001).build()
+                for (invalid in listOf(oversized, dimensions)) {
+                    assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.createSession(invalid) }.status.code)
+                }
+                val id = start("wait")
+                val input = SendInputRequest.newBuilder().setSessionId(id).setData(ByteString.copyFrom(ByteArray(65_537))).build()
+                assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.sendInput(input) }.status.code)
+                val resize = ResizeRequest.newBuilder().setSessionId(id).setCols(0).setRows(24).build()
+                assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.resize(resize) }.status.code)
             }
         }
 
@@ -254,7 +294,7 @@ class TerminalLimitsTest {
             .newBuilder()
             .setWorkingDirectory(root.toString())
             .addAllCommand(
-                listOf(java, "-Dfile.encoding=UTF-8", "-cp", classes, TerminalTestProcess::class.java.name, mode),
+                listOf(java, "-Dfile.encoding=UTF-8", "-cp", classes, TerminalTestProcess::class.java.name, mode, root.resolve("descendant.pid").toString()),
             ).putEnvironment("BOSS_PROCESS_TOKEN", "credential-sentinel")
             .putEnvironment("TERMINAL_TEST_VALUE", "preserved")
             .build()

@@ -6,7 +6,6 @@ import com.google.protobuf.ByteString
 import io.grpc.Status
 import java.io.File
 import java.io.IOException
-import java.io.InputStreamReader
 import java.util.UUID
 import java.util.concurrent.locks.ReentrantLock
 
@@ -28,12 +27,26 @@ internal class TerminalSession(
     fun startPump(onStopped: () -> Unit) {
         Thread({
             try {
-                InputStreamReader(process.inputStream, Charsets.UTF_8).use { reader ->
-                    val buffer = CharArray(4096)
-                    var count = reader.read(buffer)
-                    while (count >= 0) {
-                        output.append(chunk(String(buffer, 0, count)))
-                        count = reader.read(buffer)
+                process.inputStream.use { input ->
+                    val buffer = ByteArray(4096)
+                    // Never block on EOF: a reparented descendant may still own the pipe's write end.
+                    // Only this thread reads, so reading at most available bytes cannot wait for more.
+                    while (process.isAlive) {
+                        val available = input.available()
+                        if (available == 0) {
+                            Thread.sleep(10)
+                        } else {
+                            val count = input.read(buffer, 0, minOf(available, buffer.size))
+                            if (count > 0) output.append(chunk(ByteString.copyFrom(buffer, 0, count)))
+                        }
+                    }
+                    // Drain a bounded snapshot after process death, even if a descendant keeps writing.
+                    var remaining = minOf(input.available(), 65_536)
+                    while (remaining > 0) {
+                        val count = input.read(buffer, 0, minOf(remaining, buffer.size))
+                        if (count <= 0) break
+                        output.append(chunk(ByteString.copyFrom(buffer, 0, count)))
+                        remaining -= count
                     }
                 }
             } catch (_: IOException) {
@@ -78,11 +91,13 @@ internal class TerminalSession(
         process.destroyForcibly()
     }
 
-    private fun chunk(text: String) =
+    private fun chunk(text: String) = chunk(ByteString.copyFromUtf8(text))
+
+    private fun chunk(data: ByteString) =
         TerminalOutputChunk
             .newBuilder()
             .setSessionId(id)
-            .setData(ByteString.copyFromUtf8(text))
+            .setData(data)
             .setTimestamp(System.currentTimeMillis())
             .build()
 
@@ -96,7 +111,9 @@ internal class TerminalSession(
                 }
             val cols = request.cols.takeIf { it > 0 } ?: 80
             val rows = request.rows.takeIf { it > 0 } ?: 24
-            require(cols <= 1000 && rows <= 1000) { "Terminal dimensions exceed the limit" }
+            if (cols > 1000 || rows > 1000) {
+                throw Status.INVALID_ARGUMENT.withDescription("Terminal dimensions exceed the limit").asRuntimeException()
+            }
             val builder = ProcessBuilder(command).directory(File(directory)).redirectErrorStream(true)
             builder.environment().apply {
                 put("TERM", "xterm-256color")

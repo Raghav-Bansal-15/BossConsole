@@ -8,6 +8,18 @@ import java.nio.charset.StandardCharsets;
 public final class TerminalTestProcess {
     public static void main(String[] args) throws Exception {
         switch (args[0]) {
+            case "background" -> {
+                new ProcessBuilder(
+                    System.getProperty("java.home") + "/bin/java", "-cp", System.getProperty("java.class.path"),
+                    TerminalTestProcess.class.getName(), "hold-output", args[1]
+                ).inheritIO().start();
+                while (!java.nio.file.Files.exists(java.nio.file.Path.of(args[1]))) Thread.sleep(10);
+                Thread.sleep(200);
+            }
+            case "hold-output" -> {
+                java.nio.file.Files.writeString(java.nio.file.Path.of(args[1]), Long.toString(ProcessHandle.current().pid()));
+                Thread.sleep(30000);
+            }
             case "echo" -> System.out.print("hello caf\u00e9 \u4e16\u754c");
             case "input" -> {
                 System.out.println("ready");

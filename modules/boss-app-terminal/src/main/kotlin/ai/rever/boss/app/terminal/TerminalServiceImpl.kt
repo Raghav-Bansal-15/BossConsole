@@ -39,7 +39,9 @@ class TerminalServiceImpl(
         try {
             val response =
                 withContext(Dispatchers.IO) {
-                    require(request.serializedSize <= 131_072) { "Terminal launch request exceeds 128 KiB" }
+                    if (request.serializedSize > 131_072) {
+                        throw Status.INVALID_ARGUMENT.withDescription("Terminal launch request exceeds 128 KiB").asRuntimeException()
+                    }
                     currentCoroutineContext().ensureActive()
                     // Shutdown cannot overlook an admitted launch between process creation and registration.
                     synchronized(lock) {
@@ -83,7 +85,7 @@ class TerminalServiceImpl(
 
     /** Called while holding [lock], so shutdown and new launches cannot cross. */
     private fun reserveSlot() {
-        check(!closed) { "Terminal service is closed" }
+        if (closed) throw Status.UNAVAILABLE.withDescription("Terminal service is closed").asRuntimeException()
         if (!activeSlots.tryAcquire()) {
             throw Status.RESOURCE_EXHAUSTED.withDescription("Too many active terminals").asRuntimeException()
         }
@@ -109,7 +111,9 @@ class TerminalServiceImpl(
 
     override suspend fun sendInput(request: SendInputRequest): Empty =
         withContext(Dispatchers.IO) {
-            require(request.data.size() <= 65_536) { "Terminal input exceeds 64 KiB" }
+            if (request.data.size() > 65_536) {
+                throw Status.INVALID_ARGUMENT.withDescription("Terminal input exceeds 64 KiB").asRuntimeException()
+            }
             session(request.sessionId).send(request.data.toByteArray())
             Empty.getDefaultInstance()
         }
@@ -130,7 +134,9 @@ class TerminalServiceImpl(
         }
 
     override suspend fun resize(request: ResizeRequest): Empty {
-        require(request.cols in 1..1000 && request.rows in 1..1000) { "Invalid terminal dimensions" }
+        if (request.cols !in 1..1000 || request.rows !in 1..1000) {
+            throw Status.INVALID_ARGUMENT.withDescription("Invalid terminal dimensions").asRuntimeException()
+        }
         session(request.sessionId).apply {
             cols = request.cols
             rows = request.rows
