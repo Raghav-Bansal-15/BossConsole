@@ -439,9 +439,10 @@ object LogSanitizer {
         val words = name.replace(camelCaseBoundary, "_").split('_', '-', '.')
         return words.any { word ->
             word.isNotEmpty() && sensitiveValueNames.any { word.equals(it, ignoreCase = true) }
-        } || words.zipWithNext().any { (first, second) ->
-            first.equals("session", ignoreCase = true) && second.equals("id", ignoreCase = true)
-        }
+        } ||
+            words.zipWithNext().any { (first, second) ->
+                first.equals("session", ignoreCase = true) && second.equals("id", ignoreCase = true)
+            }
     }
 
     /**
