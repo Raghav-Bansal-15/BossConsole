@@ -23,21 +23,7 @@ internal class ProcessLogStreams private constructor(
         Thread({
             try {
                 input.use { stream ->
-                    val buffer = ByteArray(8192)
-                    var recording = true
-                    var count = stream.read(buffer)
-                    while (count >= 0) {
-                        if (recording) {
-                            try {
-                                lease.append(buffer, count)
-                            } catch (_: IOException) {
-                                // A full or unavailable log disk must not block the child's stdout forever.
-                                logger.warn("Process log writing failed; draining remaining output without recording")
-                                recording = false
-                            }
-                        }
-                        count = stream.read(buffer)
-                    }
+                    drainProcessOutput(stream, lease::append)
                 }
             } catch (_: IOException) {
                 logger.debug("Process output pipe closed")
