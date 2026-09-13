@@ -72,7 +72,12 @@ class FileSystemServiceAuthorizationTest {
             host.deleteFile(DeleteFileRequest.newBuilder().setPath(created.toString()).build())
             assertFalse(Files.exists(created))
 
-            val declared = FileSystemServiceImpl().bindService().methods.map { it.methodDescriptor.bareMethodName }.toSet()
+            val declared =
+                FileSystemServiceImpl()
+                    .bindService()
+                    .methods
+                    .map { it.methodDescriptor.bareMethodName }
+                    .toSet()
             assertEquals(declared, refusedCalls(host, file).keys + "WatchFileChanges")
             for ((method, call) in nonHostCallers.flatMap { refusedCalls(it, file).entries }) {
                 val failure = assertFailsWith<StatusException> { call() }
@@ -166,7 +171,9 @@ class FileSystemServiceAuthorizationTest {
     ): Map<String, suspend () -> Any> =
         mapOf(
             "ReadFile" to { plugin.readFile(readRequest(file)) },
-            "ScanDirectory" to { plugin.scanDirectory(ScanDirectoryRequest.newBuilder().setPath(root.toString()).build()) },
+            "ScanDirectory" to {
+                plugin.scanDirectory(ScanDirectoryRequest.newBuilder().setPath(root.toString()).build())
+            },
             "WriteFile" to { plugin.writeFile(writeRequest(file, "no")) },
             "CreateFile" to {
                 plugin.createFile(
