@@ -13,7 +13,6 @@ import io.grpc.StatusRuntimeException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
@@ -39,6 +38,7 @@ class MasteryServiceLimitsTest {
                 val release = CompletableDeferred<Unit>()
                 val attempted = AtomicInteger()
                 val allAttempted = CompletableDeferred<Unit>()
+
                 fun recordAttempt() {
                     if (attempted.incrementAndGet() == 20) allAttempted.complete(Unit)
                 }
@@ -87,10 +87,9 @@ class MasteryServiceLimitsTest {
             val timed = definition("one").toBuilder()
             timed.setNodes(0, timed.getNodes(0).toBuilder().setTimeoutMs(10))
             service.createMastery(timed.build())
-            var executionId = ""
-            assertFailsWith<TimeoutCancellationException> {
-                service.executeMastery(execute()).collect { executionId = it.executionId }
-            }
+            val events = service.executeMastery(execute()).toList()
+            val executionId = events.first().executionId
+            assertTrue(events.last().hasFailed())
             assertEquals("failed", service.getMasteryStatus(execution(executionId)).state)
             service.createMastery(MasteryDefinition.newBuilder().setId("one").build())
             assertTrue(
@@ -180,14 +179,21 @@ class MasteryServiceLimitsTest {
             assertFailsWith<StatusRuntimeException> {
                 service.createMastery(definition("one").toBuilder().setInputSchemaJson("x".repeat(65_537)).build())
             }
-            assertFailsWith<IllegalArgumentException> {
-                service.createMastery(
-                    definition("one")
-                        .toBuilder()
-                        .setNodes(0, MasteryNode.newBuilder().setMaxRetries(Int.MAX_VALUE))
-                        .build(),
-                )
-            }
+            val invalid =
+                assertFailsWith<StatusRuntimeException> {
+                    service.createMastery(
+                        definition("one")
+                            .toBuilder()
+                            .setNodes(0, MasteryNode.newBuilder().setMaxRetries(Int.MAX_VALUE))
+                            .build(),
+                    )
+                }
+            assertEquals(Status.Code.INVALID_ARGUMENT, invalid.status.code)
+            assertTrue(
+                invalid.status.description
+                    .orEmpty()
+                    .contains("5 retries"),
+            )
         }
 
     private fun service(

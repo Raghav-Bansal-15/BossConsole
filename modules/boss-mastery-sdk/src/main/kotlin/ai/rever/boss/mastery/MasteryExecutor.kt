@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicLong
 
@@ -68,10 +68,8 @@ class MasteryExecutor(
                             level
                                 .map { node ->
                                     async {
-                                        slots.withPermit {
-                                            executeNode(node, snapshot, outputBudget) { progress ->
-                                                this@channelFlow.send(progress)
-                                            }
+                                        executeNode(node, snapshot, outputBudget, slots) { progress ->
+                                            this@channelFlow.send(progress)
                                         }
                                     }
                                 }.awaitAll()
@@ -92,6 +90,7 @@ class MasteryExecutor(
         node: MasteryNode,
         nodeOutputs: Map<String, Map<String, String>>,
         outputBudget: AtomicLong,
+        slots: Semaphore,
         emit: suspend (MasteryProgress) -> Unit,
     ): Pair<String, Map<String, String>> {
         emit(
@@ -103,7 +102,7 @@ class MasteryExecutor(
 
         val resolvedInput = resolveNodeInput(node, nodeOutputs)
         val nodeStart = System.currentTimeMillis()
-        val output = invokeWithRetries(node, resolvedInput, emit)
+        val output = invokeWithRetries(node, resolvedInput, slots, emit)
         reserveOutput(node.id, output, outputBudget)
         emit(MasteryProgress.NodeCompleted(node.id, output, System.currentTimeMillis() - nodeStart))
         return node.id to output
@@ -112,14 +111,18 @@ class MasteryExecutor(
     private suspend fun invokeWithRetries(
         node: MasteryNode,
         resolvedInput: Map<String, String>,
+        slots: Semaphore,
         emit: suspend (MasteryProgress) -> Unit,
     ): Map<String, String> {
         var lastError: String? = null
 
         for (attempt in 0..node.maxRetries) {
             try {
-                return withTimeout(node.timeoutMs) {
-                    capabilityResolver.invoke(node.pluginId, node.action, resolvedInput)
+                return slots.withPermit {
+                    // Queueing and retry backoff do not consume the invocation deadline or a permit.
+                    withTimeoutOrNull(node.timeoutMs) {
+                        capabilityResolver.invoke(node.pluginId, node.action, resolvedInput)
+                    } ?: throw NodeExecutionException(node.id, "Node timed out after ${node.timeoutMs} ms")
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

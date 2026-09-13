@@ -3,9 +3,11 @@ package ai.rever.boss.mastery
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -15,6 +17,65 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class MasteryExecutorLimitsTest {
+    @Test
+    fun `node timeout retries and reports failure without cancelling the stream`() =
+        runTest {
+            var calls = 0
+            val executor =
+                executor {
+                    calls++
+                    awaitCancellation()
+                }
+            val mastery =
+                definition(1).let {
+                    it.copy(nodes = it.nodes.map { node -> node.copy(timeoutMs = 10, maxRetries = 1) })
+                }
+            val events = executor.execute(mastery, emptyMap()).toList()
+            assertEquals(2, calls)
+            assertEquals(listOf(true, false), events.filterIsInstance<MasteryProgress.NodeFailed>().map { it.willRetry })
+            assertIs<MasteryProgress.Failed>(events.last())
+        }
+
+    @Test
+    fun `ready nodes run while other nodes wait for retry backoff`() =
+        runTest {
+            val retried = mutableSetOf<String>()
+            var readyBeforeRetry = false
+            val executor =
+                MasteryExecutor(
+                    object : CapabilityResolver {
+                        override suspend fun invoke(
+                            pluginId: String,
+                            action: String,
+                            input: Map<String, String>,
+                        ): Map<String, String> {
+                            if (action == "ready") {
+                                readyBeforeRetry = retried.size == 8
+                            } else if (retried.add(action)) {
+                                error("retry me")
+                            } else {
+                                retried.remove(action)
+                            }
+                            return emptyMap()
+                        }
+
+                        override fun getAvailableCapabilities(): List<CapabilityInfo> = emptyList()
+                    },
+                )
+            val mastery =
+                definition(9).let {
+                    it.copy(
+                        nodes =
+                            it.nodes.mapIndexed { index, node ->
+                                node.copy(action = if (index == 8) "ready" else node.id, maxRetries = 1)
+                            },
+                    )
+                }
+            val events = executor.execute(mastery, emptyMap()).toList()
+            assertIs<MasteryProgress.Completed>(events.last())
+            assertTrue(readyBeforeRetry, "The ninth node must run before the first eight resume after backoff")
+        }
+
     @Test
     fun `parallel level admits at most eight nodes and resumes waiting work`() =
         runBlocking {

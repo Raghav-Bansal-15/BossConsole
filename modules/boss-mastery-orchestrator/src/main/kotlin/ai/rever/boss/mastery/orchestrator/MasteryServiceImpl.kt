@@ -157,7 +157,7 @@ class MasteryServiceImpl(
     }
 
     override suspend fun listMasteries(request: ListMasteriesRequest): ListMasteriesResponse {
-        require(request.offset >= 0 && request.limit >= 0) { "Pagination must be nonnegative" }
+        validateArgument(request.offset >= 0 && request.limit >= 0) { "Pagination must be nonnegative" }
         val all: List<KMasteryDef> =
             synchronized(stateLock) { definitions.values.toList() }
                 .filter { def ->
@@ -375,18 +375,25 @@ private fun KProgress.toProto(executionId: String): PProgress {
     return b.build()
 }
 
-/** Limits retained definitions and the amount of parallel work each execution can fan out into. */
+/** Validates one definition's encoded size, node count, retry count and timeout bounds. */
 private fun validateDefinition(request: PMasteryDef) {
-    require(request.id.length <= 200 && request.name.length <= 512 && request.author.length <= 512) {
+    validateArgument(request.id.length <= 200 && request.name.length <= 512 && request.author.length <= 512) {
         "Mastery identifiers or summary fields exceed the size limit"
     }
-    require(request.description.length <= 4096) { "Mastery description exceeds the size limit" }
+    validateArgument(request.description.length <= 4096) { "Mastery description exceeds the size limit" }
     if (request.serializedSize > 65_536 || request.nodesCount > 128 || request.edgesCount > 512) {
         throw masteryLimit("Mastery definition exceeds service limits")
     }
-    require(request.nodesList.all { it.maxRetries in 0..5 && it.timeoutMs in 0..300_000 }) {
+    validateArgument(request.nodesList.all { it.maxRetries in 0..5 && it.timeoutMs in 0..300_000 }) {
         "Mastery nodes support at most 5 retries and a 5-minute timeout"
     }
 }
 
 private fun masteryLimit(message: String) = Status.RESOURCE_EXHAUSTED.withDescription(message).asRuntimeException()
+
+private inline fun validateArgument(
+    valid: Boolean,
+    message: () -> String,
+) {
+    if (!valid) throw Status.INVALID_ARGUMENT.withDescription(message()).asRuntimeException()
+}
