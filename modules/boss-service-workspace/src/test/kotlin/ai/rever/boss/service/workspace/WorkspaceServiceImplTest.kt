@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -19,6 +20,54 @@ import kotlin.test.assertTrue
 class WorkspaceServiceImplTest {
     @get:Rule
     val temporary = TemporaryFolder()
+
+    @Test
+    fun failedSaveAndDeletePreserveCommittedWorkspaceAndCurrentSelection() =
+        runBlocking {
+            val root = temporary.newFolder("workspaces")
+            val service = WorkspaceServiceImpl(root)
+            service.saveWorkspace(
+                SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").setName("Committed").build(),
+            )
+            service.loadWorkspace(LoadWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
+            val before = service.getCurrentWorkspace(Empty.getDefaultInstance())
+            val record = root.resolve("safe.json")
+            val committed = record.readBytes()
+            val backup = root.resolve("safe.backup")
+            Files.move(record.toPath(), backup.toPath())
+            // A nonempty directory forces both atomic replacement and deletion to fail,
+            // independently of user permissions (including privileged CI runners).
+            assertTrue(record.mkdir())
+            record.resolve("sentinel").writeText("untouched")
+
+            assertFailsWith<IOException> {
+                service.saveWorkspace(
+                    SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").setName("Uncommitted").build(),
+                )
+            }
+            assertFailsWith<IOException> {
+                service.loadWorkspace(LoadWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
+            }
+            assertFailsWith<IOException> {
+                service.deleteWorkspace(DeleteWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
+            }
+            assertEquals(before, service.getCurrentWorkspace(Empty.getDefaultInstance()))
+            assertEquals(listOf(before.workspace), service.getWorkspaces(Empty.getDefaultInstance()).workspacesList)
+            assertEquals("untouched", record.resolve("sentinel").readText())
+            assertTrue(committed.contentEquals(backup.readBytes()))
+            assertFalse(root.listFiles()!!.any { it.name.endsWith(".tmp") })
+
+            assertTrue(record.resolve("sentinel").delete())
+            assertTrue(record.delete())
+            Files.move(backup.toPath(), record.toPath())
+            service.saveWorkspace(
+                SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").setName("Retried").build(),
+            )
+            assertEquals(
+                "Retried",
+                WorkspaceServiceImpl(root).getWorkspaces(Empty.getDefaultInstance()).getWorkspaces(0).name,
+            )
+        }
 
     @Test
     fun rejectsUnsafeIdsBeforeChangingMemoryOrDisk() =
