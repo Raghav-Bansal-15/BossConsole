@@ -14,6 +14,7 @@ Deno.test("download IP hashes require a separate secret and omit unavailable ana
     }
     let sent: unknown
     const client = createClient("https://example.invalid", "test-key", {
+      auth: { autoRefreshToken: false, persistSession: false },
       global: {
         fetch: async (_input, init) => {
           sent = JSON.parse(String(init?.body))
