@@ -157,6 +157,19 @@ class FileSystemLimitsTest {
         }
 
     @Test
+    fun `Windows reads retain support for paths beyond MAX_PATH`() =
+        runBlocking {
+            if (!Platform.isWindows()) return@runBlocking
+            var directory = root
+            while (directory.toString().length < 300) directory = directory.resolve("long-directory-component")
+            Files.createDirectories(directory)
+            val file = Files.writeString(directory.resolve("content.txt"), "long path content")
+            val response = stub.readFile(ReadFileRequest.newBuilder().setPath(file.toString()).build())
+            assertTrue(response.errorMessage.isEmpty(), response.errorMessage)
+            assertEquals("long path content", response.content.toStringUtf8())
+        }
+
+    @Test
     fun `sparse files support long offsets and refuse unbounded legacy reads`() =
         runBlocking {
             val file = root.resolve("large")

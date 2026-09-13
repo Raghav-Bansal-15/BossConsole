@@ -117,7 +117,7 @@ private class WindowsRegularFile(
         // OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, non-inheritable handle, shared read/write/delete.
         val opened =
             kernel.getFunction("CreateFileW", Function.ALT_CONVENTION).invokePointer(
-                arrayOf(WString(path.toAbsolutePath().toString()), 0x80000000.toInt(), 7, null, 3, 0x00200000, null),
+                arrayOf(WString(windowsExtendedPath(path)), 0x80000000.toInt(), 7, null, 3, 0x00200000, null),
             )
         if (opened == null || Pointer.nativeValue(opened) == -1L) throw nativeReadError("Open")
         handle = opened
@@ -165,3 +165,12 @@ private class WindowsRegularFile(
 }
 
 private fun nativeReadError(operation: String) = IOException("$operation failed (OS error ${Native.getLastError()})")
+
+private fun windowsExtendedPath(path: Path): String {
+    val absolute = path.toAbsolutePath().normalize().toString()
+    return when {
+        absolute.startsWith("\\\\?\\") -> absolute
+        absolute.startsWith("\\\\") -> "\\\\?\\UNC\\" + absolute.removePrefix("\\\\")
+        else -> "\\\\?\\" + absolute
+    }
+}
