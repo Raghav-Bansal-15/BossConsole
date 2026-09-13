@@ -11,20 +11,75 @@ import ai.rever.boss.mastery.MasteryExecutor
 import io.grpc.Status
 import io.grpc.StatusRuntimeException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class MasteryServiceLimitsTest {
+    @Test
+    fun `simultaneous requests cannot overbook execution capacity`() =
+        runBlocking {
+            withTimeout(10_000) {
+                val start = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val attempted = AtomicInteger()
+                val allAttempted = CompletableDeferred<Unit>()
+                fun recordAttempt() {
+                    if (attempted.incrementAndGet() == 20) allAttempted.complete(Unit)
+                }
+                val service =
+                    service {
+                        recordAttempt()
+                        release.await()
+                        emptyMap()
+                    }
+                service.createMastery(definition("one"))
+                val requests =
+                    (1..20).map {
+                        async(Dispatchers.Default) {
+                            start.await()
+                            try {
+                                service.executeMastery(execute()).collect()
+                                true
+                            } catch (e: StatusRuntimeException) {
+                                assertEquals(Status.Code.RESOURCE_EXHAUSTED, e.status.code)
+                                recordAttempt()
+                                false
+                            }
+                        }
+                    }
+                try {
+                    start.complete(Unit)
+                    allAttempted.await()
+                } finally {
+                    release.complete(Unit)
+                }
+                assertEquals(1, requests.awaitAll().count { it })
+                assertTrue(
+                    service
+                        .executeMastery(execute())
+                        .toList()
+                        .last()
+                        .hasCompleted(),
+                )
+            }
+        }
+
     @Test
     fun `node timeout is a failure and releases execution capacity`() =
         runTest {
