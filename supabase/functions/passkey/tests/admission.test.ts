@@ -164,3 +164,27 @@ Deno.test('cleanup requires the dedicated scheduler secret and preserves authori
     else Deno.env.set('PASSKEY_MAINTENANCE_TOKEN', previous)
   }
 })
+
+Deno.test('small streamed request survives repeated buffer growth before validation', async () => {
+  const client = createMockSupabaseClient()
+  client.mockResponse('rpc.admit_passkey_challenge', {
+    data: [{ allowed: false, retry_after_seconds: 7 }], error: null
+  }, 'call')
+  // Whitespace is legal JSON and takes this request across several growth boundaries.
+  const encoded = new TextEncoder().encode(' '.repeat(9000) + JSON.stringify(challengeBody))
+  let offset = 0
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset === encoded.byteLength) return controller.close()
+      const end = Math.min(offset + 37, encoded.byteLength)
+      controller.enqueue(encoded.slice(offset, end))
+      offset = end
+    }
+  })
+  const response = await appFor(client).request('/auth/challenge', {
+    method: 'POST', body: stream, headers: { 'Content-Type': 'application/json' }
+  })
+  assertEquals(response.status, 429)
+  assertEquals(response.headers.get('Retry-After'), '7')
+  assertEquals(client.getQueryHistory().map(query => query.table), ['rpc.admit_passkey_challenge'])
+})

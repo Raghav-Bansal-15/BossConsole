@@ -93,7 +93,6 @@ begin
   if p_type is null then raise exception 'Challenge type is required' using errcode = '22023'; end if;
   perform pg_advisory_xact_lock(545, 14);
   observed_at := clock_timestamp();
-  perform public.clean_expired_passkey_challenges();
   select * into strict budget from public.passkey_challenge_admission where type = p_type for update;
   maximum := case when p_type = 'authentication' then 300 else 60 end;
   if budget.window_started_at <= observed_at - interval '60 seconds'
@@ -112,6 +111,8 @@ begin
     return query select false, 30;
     return;
   end if;
+  -- Rejected requests must not perform cleanup while holding the admission lock.
+  perform public.clean_expired_passkey_challenges();
   update public.passkey_challenge_admission set used = used + 1 where type = p_type;
   return query select true, 0;
 end;

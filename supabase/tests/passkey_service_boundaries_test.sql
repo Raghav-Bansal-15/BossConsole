@@ -100,7 +100,14 @@ reset role;
 set local role service_role;
 update public.passkey_challenge_admission set used=299, window_started_at=clock_timestamp() where type='authentication';
 select ok((select allowed from public.admit_passkey_challenge('authentication')), 'the last authentication slot is admitted');
+-- Expire after insertion so the existing INSERT cleanup trigger cannot remove the fixture.
+insert into public.passkey_challenges(challenge,type,expires_at)
+ values ('refused-admission-cleanup-fixture','authentication',clock_timestamp()+interval '5 minutes');
+update public.passkey_challenges set expires_at=clock_timestamp()-interval '1 second'
+ where challenge='refused-admission-cleanup-fixture';
 select ok(not (select allowed from public.admit_passkey_challenge('authentication')), 'the next request is refused');
+select is((select count(*) from public.passkey_challenges where challenge='refused-admission-cleanup-fixture'),
+ 1::bigint, 'budget refusal does not perform cleanup work');
 select ok((select retry_after_seconds between 1 and 60 from public.admit_passkey_challenge('authentication')),
  'refusal includes a bounded retry interval');
 select ok((select allowed from public.admit_passkey_challenge('registration')), 'registration retains independent admission capacity');

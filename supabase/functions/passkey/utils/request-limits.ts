@@ -8,7 +8,7 @@ export const limitPasskeyRequest: MiddlewareHandler = async (ctx, next) => {
   const original = ctx.req.raw
   if (!original.body) return next()
   const reader = original.body.getReader()
-  const body = new Uint8Array(MAX_PASSKEY_REQUEST_BYTES)
+  let body = new Uint8Array(0)
   let bytes = 0
   try {
     while (true) {
@@ -18,6 +18,13 @@ export const limitPasskeyRequest: MiddlewareHandler = async (ctx, next) => {
       if (nextSize > MAX_PASSKEY_REQUEST_BYTES) {
         await reader.cancel()
         return ctx.json({ error: "Passkey request exceeds the supported size" }, 413)
+      }
+      // Grow only for bytes actually received; tiny requests do not reserve the ceiling.
+      if (nextSize > body.byteLength) {
+        const grown = new Uint8Array(Math.min(MAX_PASSKEY_REQUEST_BYTES,
+          Math.max(nextSize, body.byteLength * 2, 1024)))
+        grown.set(body.subarray(0, bytes))
+        body = grown
       }
       body.set(chunk.value, bytes)
       bytes = nextSize
