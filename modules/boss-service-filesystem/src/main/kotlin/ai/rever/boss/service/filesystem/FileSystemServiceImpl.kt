@@ -340,6 +340,7 @@ class FileSystemServiceImpl : FileSystemServiceGrpcKt.FileSystemServiceCoroutine
                             }
                         }
 
+                        IpcCall.requireHost()
                         emit(
                             FileChangeEvent
                                 .newBuilder()

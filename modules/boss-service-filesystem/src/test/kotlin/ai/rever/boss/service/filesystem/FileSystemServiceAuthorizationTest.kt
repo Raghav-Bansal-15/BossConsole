@@ -16,12 +16,14 @@ import io.grpc.StatusException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.AfterTest
@@ -70,12 +72,14 @@ class FileSystemServiceAuthorizationTest {
             host.deleteFile(DeleteFileRequest.newBuilder().setPath(created.toString()).build())
             assertFalse(Files.exists(created))
 
-            for (call in nonHostCallers.flatMap { refusedCalls(it, file) }) {
+            val declared = FileSystemServiceImpl().bindService().methods.map { it.methodDescriptor.bareMethodName }.toSet()
+            assertEquals(declared, refusedCalls(host, file).keys + "WatchFileChanges")
+            for ((method, call) in nonHostCallers.flatMap { refusedCalls(it, file).entries }) {
                 val failure = assertFailsWith<StatusException> { call() }
                 assertEquals(
                     Status.Code.PERMISSION_DENIED,
                     failure.status.code,
-                    "an authenticated non-host caller must be refused",
+                    "$method must refuse an authenticated non-host caller",
                 )
             }
             // Nothing the refused caller attempted may have landed.
@@ -120,14 +124,20 @@ class FileSystemServiceAuthorizationTest {
         runBlocking {
             withTimeout(30_000) {
                 val first = CompletableDeferred<FileChangeEvent>()
+                val activity = Channel<Unit>(Channel.CONFLATED)
                 val completion =
                     async {
                         assertFailsWith<StatusException> {
-                            host.watchFileChanges(watchRequest()).collect { first.complete(it) }
+                            host.watchFileChanges(watchRequest()).collect {
+                                activity.trySend(Unit)
+                                first.complete(it)
+                            }
                         }
                     }
                 val event = awaitWatchEvent(first)
-                // No more filesystem events are produced: revocation must close an idle stream.
+                // Drain queued events after writes stop, then observe three poll intervals of quiet.
+                while (withTimeoutOrNull(1_500) { activity.receive() } != null) { /* wait for quiescence */ }
+                assertFalse(completion.isCompleted, "The watch must remain open before revocation")
                 service.registry.revoke("host")
                 val failure = withTimeout(5_000) { completion.await() }
                 assertEquals(Status.Code.UNAUTHENTICATED, failure.status.code)
@@ -153,22 +163,22 @@ class FileSystemServiceAuthorizationTest {
     private fun refusedCalls(
         plugin: FileSystemServiceGrpcKt.FileSystemServiceCoroutineStub,
         file: Path,
-    ): List<suspend () -> Any> =
-        listOf(
-            { plugin.readFile(readRequest(file)) },
-            { plugin.scanDirectory(ScanDirectoryRequest.newBuilder().setPath(root.toString()).build()) },
-            { plugin.writeFile(writeRequest(file, "no")) },
-            {
+    ): Map<String, suspend () -> Any> =
+        mapOf(
+            "ReadFile" to { plugin.readFile(readRequest(file)) },
+            "ScanDirectory" to { plugin.scanDirectory(ScanDirectoryRequest.newBuilder().setPath(root.toString()).build()) },
+            "WriteFile" to { plugin.writeFile(writeRequest(file, "no")) },
+            "CreateFile" to {
                 plugin.createFile(
                     CreateFileRequest.newBuilder().setPath(root.resolve("created-by-plugin").toString()).build(),
                 )
             },
-            {
+            "DeleteFile" to {
                 plugin.deleteFile(
                     DeleteFileRequest.newBuilder().setPath(file.toString()).build(),
                 )
             },
-            {
+            "RenameFile" to {
                 plugin.renameFile(
                     RenameFileRequest
                         .newBuilder()
