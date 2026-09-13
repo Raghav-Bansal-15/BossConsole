@@ -309,10 +309,9 @@ abstract class PublishPluginTask : DefaultTask() {
             "pluginId" to pluginId,
             "displayName" to displayName,
             "description" to description,
-            "authorName" to authorName,
             "homepageUrl" to homepageUrl,
             "tags" to tags,
-        ))
+        ).let { fields -> if (authorName.isNullOrBlank()) fields else fields + ("authorName" to authorName) })
 
         val response = httpPost("$baseUrl/publish", body, token, apiKey)
         if (response.statusCode !in 200..201) {

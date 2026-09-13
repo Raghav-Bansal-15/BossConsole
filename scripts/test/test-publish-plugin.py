@@ -73,12 +73,12 @@ class PublisherTest(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def run_publisher(self, *extra):
+    def run_publisher(self, *extra, author=SPECIAL):
         command = [
             str(PUBLISHER), str(self.jar), "--url", self.base,
             "--plugin-id", "plugin/a?b#c %雪", "--display-name", SPECIAL,
             "--description", SPECIAL, "--changelog", SPECIAL,
-            "--author", SPECIAL, "--tags", 'alpha,"quoted",雪',
+            "--author", author, "--tags", 'alpha,"quoted",雪',
             "--homepage-url", "https://example.invalid/plugin", *extra,
         ]
         if isinstance(self, PowerShellPublisherTest):
@@ -86,7 +86,7 @@ class PublisherTest(unittest.TestCase):
                        str(PUBLISHER.with_suffix(".ps1")), "-JarPath", str(self.jar),
                        "-StoreUrl", self.base, "-PluginId", "plugin/a?b#c %雪",
                        "-DisplayName", SPECIAL, "-Description", SPECIAL, "-Changelog", SPECIAL,
-                       "-Author", SPECIAL, "-Tags", 'alpha,"quoted",雪',
+                       "-Author", author, "-Tags", 'alpha,"quoted",雪',
                        "-HomepageUrl", "https://example.invalid/plugin", *extra]
         result = subprocess.run(command, env={**os.environ, "BOSS_PLUGIN_STORE_TOKEN": TOKEN},
             cwd=self.temporary.name, capture_output=True, text=True, timeout=30)
@@ -113,6 +113,11 @@ class PublisherTest(unittest.TestCase):
                           "jarSize": len(jar_bytes)}, json.loads(self.requests[4][3]))
         for request in (self.requests[0], self.requests[1], self.requests[2], self.requests[4]):
             self.assertEqual("Bearer " + TOKEN, request[2]["Authorization"])
+
+    def test_omits_unspecified_author_for_store_default(self):
+        result = self.run_publisher(author="")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("authorName", json.loads(self.requests[1][3]))
 
     def test_refuses_errors_without_creating_plugin_or_logging_body(self):
         self.status = 403

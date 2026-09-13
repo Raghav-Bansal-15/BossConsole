@@ -196,7 +196,7 @@ function Invoke-PluginStoreRequest {
     
     if ($Body -and $Method -ne "GET") {
         if ($ContentType -eq "application/json") {
-            $params["Body"] = ($Body | ConvertTo-Json -Depth 10)
+            $params["Body"] = [System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 10))
         }
         else {
             $params["Body"] = $Body

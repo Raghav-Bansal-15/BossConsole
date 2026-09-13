@@ -84,6 +84,7 @@ class PublishPluginTaskTest {
             assertEquals(listOf("GET", "POST", "POST", "PUT", "POST"), requests.map { it.method })
             assertEquals("/plugin%2Fa%3Fb%23c%20%25%E9%9B%AA", requests[0].path)
             val creation = JsonSlurper().parse(requests[1].body) as Map<*, *>
+            assertFalse(creation.containsKey("authorName"), "The store rejects null authorName; omit it for its default")
             assertEquals(special, creation["displayName"])
             assertEquals(special, creation["description"])
             assertEquals(listOf("alpha", "\"quoted\"", "雪"), creation["tags"])

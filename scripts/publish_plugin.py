@@ -136,10 +136,11 @@ def publish(args):
             "pluginId": plugin_id,
             "displayName": display_name,
             "description": args.description or "",
-            "authorName": args.author or None,
             "homepageUrl": homepage,
             "tags": [tag.strip() for tag in args.tags.split(",")] if args.tags else [],
         }
+        if args.author:
+            payload["authorName"] = args.author
         created, _ = api_request("POST", base + "/publish", token, anon_key, payload)
         if created not in (200, 201):
             raise PublishError(f"Plugin creation failed with HTTP {created}.")
