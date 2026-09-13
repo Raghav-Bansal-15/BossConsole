@@ -1,10 +1,13 @@
 package ai.rever.boss.files
 
+import com.sun.jna.Platform
+import org.junit.Assume.assumeFalse
 import java.nio.ByteBuffer
 import java.nio.file.DirectoryNotEmptyException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
+import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -60,6 +63,25 @@ class NativeDirectoryOperationsTest {
             assertEquals(Path.of("file"), Files.readSymbolicLink(to.resolve("link")))
             assertFalse(Files.exists(to.resolve("full")))
             assertEquals("survives", Files.readString(from.resolve("full/child")))
+        }
+
+    @Test
+    fun `a failed copy leaves no broadly readable temporary file`() =
+        fixture { root ->
+            assumeFalse("POSIX creation permissions required", Platform.isWindows())
+            val source = root.resolve("fifo")
+            PosixApi.check(
+                PosixApi.library.getFunction("mkfifo").invokeInt(arrayOf<Any>(source.toString(), 384)),
+                "Create copy failure fixture",
+            )
+            NativeDirectory.open(root).use { directory ->
+                // A FIFO opens nonblocking, then fails regular-file validation after exclusive target creation.
+                assertFailsWith<IllegalArgumentException> {
+                    directory.copyEntry("fifo", directory, "temporary")
+                }
+            }
+            val permissions = Files.getPosixFilePermissions(root.resolve("temporary"))
+            assertEquals(PosixFilePermissions.fromString("rw-------"), permissions)
         }
 
     @Test

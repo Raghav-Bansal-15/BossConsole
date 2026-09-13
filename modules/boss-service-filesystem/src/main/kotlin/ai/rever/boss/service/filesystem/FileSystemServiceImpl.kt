@@ -54,7 +54,7 @@ class FileSystemServiceImpl internal constructor(
                     "Read offsets and limits must be nonnegative"
                 }
                 val maximum = readLimit(request)
-                access.entry(request.path).use { entry ->
+                access.entry(request.path, followLeaf = true).use { entry ->
                     entry.parent.file(entry.name).use { reader ->
                         val total = reader.size()
                         val buffer = ByteBuffer.allocate(maximum + 1)

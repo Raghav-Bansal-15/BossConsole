@@ -37,6 +37,20 @@ class FileAuthorityTest {
     }
 
     @Test
+    fun `reads follow allowed file links and refuse links to protected targets`() =
+        runBlocking {
+            val target = Files.writeString(root.resolve("readable"), "allowed")
+            val allowedLink = Files.createSymbolicLink(root.resolve("read-link"), target)
+            val response = service.readFile(ReadFileRequest.newBuilder().setPath(allowedLink.toString()).build())
+            assertEquals("allowed", response.content.toStringUtf8(), response.errorMessage)
+            val secret = Files.writeString(blocked.resolve("secret"), "protected")
+            val deniedLink = Files.createSymbolicLink(root.resolve("denied-link"), secret)
+            assertFailsWith<FilePathDeniedException> {
+                service.readFile(ReadFileRequest.newBuilder().setPath(deniedLink.toString()).build())
+            }
+        }
+
+    @Test
     fun `dangling final and parent links cannot write into protected missing targets`() =
         runBlocking {
             val final = Files.createSymbolicLink(root.resolve("final"), blocked.resolve("missing"))

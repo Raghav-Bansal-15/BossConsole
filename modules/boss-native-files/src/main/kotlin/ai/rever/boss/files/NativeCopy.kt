@@ -66,13 +66,14 @@ internal object PosixCopy {
                 "Open copy source",
             )
         try {
+            // Keep temporary entries private until contents and final source attributes are installed.
             if (directory) {
                 PosixDirectory(duplicate(input)).use { child ->
                     child.entries { throw DirectoryNotEmptyException(sourceName) }
                 }
                 PosixApi.check(
                     PosixApi.library.getFunction("mkdirat").invokeInt(
-                        arrayOf<Any>(target, name, 511),
+                        arrayOf<Any>(target, name, 448),
                     ),
                     "Copy directory",
                 )
@@ -84,7 +85,7 @@ internal object PosixCopy {
             val output =
                 PosixApi.check(
                     PosixApi.library.getFunction("openat", 3 shl 7).invokeInt(
-                        arrayOf<Any>(target, name, targetFlags, 438),
+                        arrayOf<Any>(target, name, targetFlags, 384),
                     ),
                     "Open copy destination",
                 )
