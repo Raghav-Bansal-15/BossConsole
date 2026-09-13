@@ -3,8 +3,6 @@ package ai.rever.boss.ipc
 import ai.rever.boss.ipc.proto.*
 import ai.rever.boss.ipc.services.EventBusServiceImpl
 import com.google.protobuf.ByteString
-import io.grpc.ManagedChannelBuilder
-import io.grpc.ServerBuilder
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -15,7 +13,6 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
-import java.net.ServerSocket
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 

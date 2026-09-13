@@ -10,6 +10,9 @@ on:
       - 'modules/boss-process-manager/**'
       - 'modules/boss-app-terminal/**'
       - 'modules/boss-orchestrator/**'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/kernel/**'
+      - 'composeApp/src/desktopMain/kotlin/ai/rever/boss/components/plugin/OutOfProcessPluginSpawnerImpl.kt'
+      - 'composeApp/src/desktopTest/kotlin/ai/rever/boss/kernel/**'
       - '.github/workflows/authenticated-ipc.yml'
   workflow_dispatch:
 
@@ -43,7 +46,7 @@ jobs:
           --no-daemon
       - uses: graalvm/setup-graalvm@v1
         with:
-          version: '25.0'
+          java-version: '25'
           distribution: graalvm
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and exercise native authenticated IPC
