@@ -48,6 +48,7 @@ class FileAuthorityTest {
             assertFailsWith<FilePathDeniedException> {
                 service.readFile(ReadFileRequest.newBuilder().setPath(deniedLink.toString()).build())
             }
+            Unit
         }
 
     @Test
