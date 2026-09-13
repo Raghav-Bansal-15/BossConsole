@@ -205,6 +205,16 @@ function Invoke-PluginStoreRequest {
     
     try {
         Assert-PublishingUrl $Url
+    }
+    catch {
+        return @{
+            Success = $false
+            Error = "Publishing URL must use HTTPS (except loopback), without user information or a fragment"
+            StatusCode = $null
+            Data = $null
+        }
+    }
+    try {
         $response = Invoke-RestMethod @params
         return @{
             Success = $true
