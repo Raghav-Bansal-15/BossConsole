@@ -239,7 +239,8 @@ class TerminalLimitsTest {
                 withTimeout(5_000) {
                     val id = start("background")
                     awaitExit(id)
-                    val descendant = ProcessHandle.of(Files.readString(root.resolve("descendant.pid")).toLong()).orElseThrow()
+                    val descendant =
+                        ProcessHandle.of(Files.readString(root.resolve("descendant.pid")).toLong()).orElseThrow()
                     assertTrue(descendant.isAlive)
                     assertTrue(stub.streamOutput(stream(id)).toList().last().isExit)
                     val replacement = start("echo")
@@ -258,10 +259,18 @@ class TerminalLimitsTest {
                 val oversized = request("echo").toBuilder().putEnvironment("LARGE", "x".repeat(131_072)).build()
                 val dimensions = request("echo").toBuilder().setCols(1001).build()
                 for (invalid in listOf(oversized, dimensions)) {
-                    assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.createSession(invalid) }.status.code)
+                    assertEquals(
+                        Status.Code.INVALID_ARGUMENT,
+                        assertFailsWith<StatusException> { stub.createSession(invalid) }.status.code,
+                    )
                 }
                 val id = start("wait")
-                val input = SendInputRequest.newBuilder().setSessionId(id).setData(ByteString.copyFrom(ByteArray(65_537))).build()
+                val input =
+                    SendInputRequest
+                        .newBuilder()
+                        .setSessionId(id)
+                        .setData(ByteString.copyFrom(ByteArray(65_537)))
+                        .build()
                 assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.sendInput(input) }.status.code)
                 val resize = ResizeRequest.newBuilder().setSessionId(id).setCols(0).setRows(24).build()
                 assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.resize(resize) }.status.code)
@@ -294,7 +303,15 @@ class TerminalLimitsTest {
             .newBuilder()
             .setWorkingDirectory(root.toString())
             .addAllCommand(
-                listOf(java, "-Dfile.encoding=UTF-8", "-cp", classes, TerminalTestProcess::class.java.name, mode, root.resolve("descendant.pid").toString()),
+                listOf(
+                    java,
+                    "-Dfile.encoding=UTF-8",
+                    "-cp",
+                    classes,
+                    TerminalTestProcess::class.java.name,
+                    mode,
+                    root.resolve("descendant.pid").toString(),
+                ),
             ).putEnvironment("BOSS_PROCESS_TOKEN", "credential-sentinel")
             .putEnvironment("TERMINAL_TEST_VALUE", "preserved")
             .build()
