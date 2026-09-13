@@ -84,7 +84,9 @@ class FileSystemServiceImpl : FileSystemServiceGrpcKt.FileSystemServiceCoroutine
                         .takeIf { it > 0 }
                         ?.coerceAtMost(FileSystemLimits.READ_BYTES.toLong())
                         ?.toInt() ?: FileSystemLimits.READ_BYTES
-                openRegularFile(file.toPath()).use { reader ->
+                val resolved = file.toPath().toRealPath()
+                validatePath(resolved.toString())
+                openRegularFile(resolved).use { reader ->
                     val totalSize = reader.size
                     val bytes = reader.readPage(request.offsetBytes, maximum + 1)
                     currentCoroutineContext().ensureActive()

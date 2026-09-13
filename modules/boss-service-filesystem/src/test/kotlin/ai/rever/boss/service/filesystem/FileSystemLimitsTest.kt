@@ -157,6 +157,16 @@ class FileSystemLimitsTest {
         }
 
     @Test
+    fun `reads through file links resolve the target before the bounded open`() =
+        runBlocking {
+            val target = Files.writeString(root.resolve("target"), "linked content")
+            val link = Files.createSymbolicLink(root.resolve("file-link"), target)
+            val response = stub.readFile(ReadFileRequest.newBuilder().setPath(link.toString()).build())
+            assertTrue(response.errorMessage.isEmpty(), response.errorMessage)
+            assertEquals("linked content", response.content.toStringUtf8())
+        }
+
+    @Test
     fun `Windows reads retain support for paths beyond MAX_PATH`() =
         runBlocking {
             if (!Platform.isWindows()) return@runBlocking
