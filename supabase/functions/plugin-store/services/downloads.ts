@@ -26,13 +26,22 @@ export async function recordDownload(
   return data
 }
 
+let warnedAboutHashKey = false
+
 /**
  * Hash analytics input with an independently provisioned secret.
+ * Input is the raw forwarded header, not a verified unique-client identity.
  * Missing configuration omits this optional field without preventing downloads.
  */
 export async function hashIp(ip: string): Promise<string | null> {
   const secret = Deno.env.get('PLUGIN_DOWNLOAD_IP_HASH_KEY')
-  if (!secret || secret.length < 32 || secret.length > 256 || /\s/.test(secret)) return null
+  if (!secret || secret.length < 32 || secret.length > 256 || /\s/.test(secret)) {
+    if (!warnedAboutHashKey) {
+      console.warn('PLUGIN_DOWNLOAD_IP_HASH_KEY missing or invalid; download IP hashing is disabled')
+      warnedAboutHashKey = true
+    }
+    return null
+  }
   if (!ip || ip.length > 1024) return null
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(

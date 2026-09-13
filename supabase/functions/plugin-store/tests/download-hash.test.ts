@@ -6,12 +6,18 @@ const secretName = "PLUGIN_DOWNLOAD_IP_HASH_KEY"
 
 Deno.test("download IP hashes require a separate secret and omit unavailable analytics", async () => {
   const previous = Deno.env.get(secretName)
+  const previousWarn = console.warn
+  const warnings: string[] = []
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")) }
   try {
     for (const secret of [undefined, "", "short", "x".repeat(257), "x".repeat(32) + " "]) {
       if (secret === undefined) Deno.env.delete(secretName)
       else Deno.env.set(secretName, secret)
       assertEquals(await hashIp("192.0.2.1"), null)
     }
+    assertEquals(warnings, [
+      "PLUGIN_DOWNLOAD_IP_HASH_KEY missing or invalid; download IP hashing is disabled",
+    ])
     let sent: unknown
     const client = createClient("https://example.invalid", "test-key", {
       auth: { autoRefreshToken: false, persistSession: false },
@@ -26,6 +32,7 @@ Deno.test("download IP hashes require a separate secret and omit unavailable ana
     assertEquals(result, "download-id")
     assertEquals(sent, { p_plugin_id: "plugin-id", p_version_id: "version-id", p_user_id: null, p_ip_hash: null })
   } finally {
+    console.warn = previousWarn
     if (previous === undefined) Deno.env.delete(secretName)
     else Deno.env.set(secretName, previous)
   }
