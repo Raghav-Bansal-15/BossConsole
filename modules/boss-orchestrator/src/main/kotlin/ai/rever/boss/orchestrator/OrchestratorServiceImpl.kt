@@ -78,7 +78,7 @@ class OrchestratorServiceImpl(
                 .setProcessId(request.processId)
                 .setStrategy(strategy)
                 .setSuccess(outcome !is RepairOutcome.Failed)
-                .setDescription(action.description.take(RepairLimits.MESSAGE_CHARS))
+                .setDescription(action.description.take(RepairLimits.HISTORY_DESCRIPTION_CHARS))
                 .setTimestamp(System.currentTimeMillis())
                 .build()
 

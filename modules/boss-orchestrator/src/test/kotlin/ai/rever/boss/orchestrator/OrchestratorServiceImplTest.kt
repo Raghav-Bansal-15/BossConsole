@@ -74,6 +74,24 @@ class OrchestratorServiceImplTest {
     // ---- the approval response says what happened ----
 
     @Test
+    fun `full multibyte history fits the default grpc receive limit`() =
+        runTest {
+            val service = OrchestratorServiceImpl(engine())
+            val original = report("界".repeat(200), RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG)
+            val manifest = original.manifest.toBuilder()
+            manifest.setRepairHints(
+                0,
+                manifest.getRepairHints(0).toBuilder().setSuggestedFix("界".repeat(RepairLimits.MESSAGE_CHARS)),
+            )
+            val request = original.toBuilder().setManifest(manifest).build()
+            repeat(256) { service.reportFailure(request) }
+            val history = service.getRepairHistory(RepairHistoryRequest.getDefaultInstance())
+            assertEquals(256, history.entriesCount)
+            assertTrue(history.serializedSize < 4 * 1024 * 1024)
+            assertTrue(history.entriesList.all { it.description.isNotBlank() })
+        }
+
+    @Test
     fun `completed history is bounded without evicting pending proposals`() =
         runTest {
             val service = OrchestratorServiceImpl(engine(), historyLimit = 3, pendingLimit = 2)
