@@ -1,5 +1,7 @@
 package ai.rever.boss.plugin.repository.remote
 
+import ai.rever.boss.plugin.logging.BossLogger
+import ai.rever.boss.plugin.logging.LogCategory
 import ai.rever.boss.plugin.pathutils.BossDirectories
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -19,9 +21,16 @@ import kotlin.io.path.name
 class PluginDownloadCache(
     cacheDir: File = BossDirectories.resolve("plugin-cache"),
 ) {
-    private val root = Files.createDirectories(cacheDir.toPath()).toRealPath()
+    private val logger = BossLogger.forComponent("PluginDownloadCache")
 
-    private val rootIdentity = Files.readAttributes(root, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey()
+    // Resolve the host-supplied root once, including intentional host directory links.
+    // Defer I/O so an unavailable cache cannot prevent repository construction.
+    private val location by lazy {
+        val path = Files.createDirectories(cacheDir.toPath()).toRealPath()
+        path to Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey()
+    }
+    private val root: Path get() = location.first
+    private val rootIdentity: Any? get() = location.second
 
     @Serializable
     private data class CacheMetadata(
@@ -36,7 +45,11 @@ class PluginDownloadCache(
         expectedSha256: String,
     ): File? {
         val path = cacheFile(pluginId, version)
-        if (!Files.isRegularFile(path, NOFOLLOW_LINKS) || readMetadata(path) == null) return null
+        if (!Files.isRegularFile(path, NOFOLLOW_LINKS)) return null
+        if (readMetadata(path) == null) {
+            logger.warn(LogCategory.SYSTEM, "Ignoring plugin cache entry with invalid identity metadata")
+            return null
+        }
         val digest = MessageDigest.getInstance("SHA-256")
         Files.newByteChannel(path, setOf(READ, NOFOLLOW_LINKS)).use { channel ->
             Channels.newInputStream(channel).use { input ->
@@ -52,7 +65,9 @@ class PluginDownloadCache(
         return if (actual.equals(expectedSha256, ignoreCase = true)) {
             path.toFile()
         } else {
+            logger.warn(LogCategory.SYSTEM, "Ignoring plugin cache entry with mismatching SHA-256")
             Files.deleteIfExists(path)
+            Files.deleteIfExists(metadataPath(path))
             null
         }
     }
@@ -160,6 +175,7 @@ class PluginDownloadCache(
 
     private fun checkRoot() {
         checkDirectory(root)
+        // Some providers (including Windows) return null: only path checks apply there.
         check(Files.readAttributes(root, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey() == rootIdentity) {
             "Plugin cache directory was replaced"
         }
