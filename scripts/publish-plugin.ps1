@@ -128,8 +128,18 @@ function Write-Step {
 
 function Get-Sha256Hash {
     param([string]$FilePath)
-    $hash = Get-FileHash -LiteralPath $FilePath -Algorithm SHA256 -ErrorAction Stop
-    return [string]$hash.Hash.ToLowerInvariant()
+    # Do not rely on module auto-loading: PowerShell 5.1 launched from pwsh can
+    # inherit a PSModulePath that does not expose Get-FileHash.
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($FilePath)
+        try {
+            $bytes = $algorithm.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+        }
+        finally { $stream.Dispose() }
+    }
+    finally { $algorithm.Dispose() }
 }
 
 function Get-ManifestValue {
