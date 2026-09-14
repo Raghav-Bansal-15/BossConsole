@@ -59,6 +59,10 @@ export async function storeChallenge(
         return { success: false as const, status: 429 as const, retryAfterSeconds: 30,
           error: 'Challenge capacity is temporarily unavailable. Retry shortly.' }
       }
+      if (error.code === '55P03') {
+        return { success: false as const, status: 503 as const, retryAfterSeconds: 1,
+          error: 'Challenge storage is temporarily busy. Retry shortly.' }
+      }
       return { success: false as const, error: 'Failed to store challenge' }
     }
 

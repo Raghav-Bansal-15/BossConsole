@@ -112,6 +112,18 @@ Deno.test('insertion capacity race returns a retryable refusal after successful 
   assertEquals(response.headers.get('Retry-After'), '30')
 })
 
+Deno.test('insertion lock contention returns a short retry without leaking database diagnostics', async () => {
+  const client = createMockSupabaseClient()
+  allowAdmission(client)
+  client.mockResponse('rpc.find_user_by_email', { data: [{ id: 'owner', email: challengeBody.email }], error: null }, 'call')
+  client.mockResponse('user_passkeys', { data: [mockPasskey], error: null }, 'select')
+  client.mockResponse('passkey_challenges', { data: null, error: { code: '55P03', message: 'private diagnostic' } }, 'insert')
+  const response = await post(appFor(client), '/auth/challenge', challengeBody)
+  assertEquals(response.status, 503)
+  assertEquals(response.headers.get('Retry-After'), '1')
+  assertEquals((await response.text()).includes('private diagnostic'), false)
+})
+
 Deno.test('streamed oversized JSON is cancelled before parsing or database access even with a false length', async () => {
   for (const claimedLength of [undefined, '1']) {
     const client = createMockSupabaseClient()

@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import subprocess
+import time
 import uuid
 
 
@@ -38,6 +39,27 @@ def main():
     previous = json.loads(sql("select json_agg(row_to_json(t)) from public.passkey_challenge_admission t;"))
     prefix = 'concurrency-' + uuid.uuid4().hex
     try:
+        sql("update public.passkey_challenge_admission set used=0, window_started_at=clock_timestamp();")
+        holder = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True)
+        try:
+            holder.stdin.write("begin; select pg_advisory_xact_lock(545,14); select 'held'; "
+                               "select pg_sleep(4); rollback;\n")
+            holder.stdin.close()
+            while holder.stdout.readline().strip() != 'held':
+                if holder.poll() is not None:
+                    raise RuntimeError('Fixture did not acquire the authentication lock')
+            started = time.monotonic()
+            assert sql("set role service_role; select allowed from public.admit_passkey_challenge('authentication');",
+                       expected_error='55P03') is None
+            assert time.monotonic() - started < 2, 'Admission waited for the held transaction'
+            assert sql("set role service_role; select allowed from "
+                       "public.admit_passkey_challenge('registration');") == 't'
+            print('Held authentication lock: bounded refusal, registration remains available')
+        finally:
+            holder.wait(timeout=10)
+            holder.stdout.close()
+            holder.stderr.close()
         sql("update public.passkey_challenge_admission set used=299, window_started_at=clock_timestamp() "
             "where type='authentication';")
         with ThreadPoolExecutor(max_workers=16) as pool:

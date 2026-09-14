@@ -79,19 +79,20 @@ $$;
 revoke all privileges on function public.trigger_cleanup_expired_challenges() from public, anon, authenticated;
 grant execute on function public.trigger_cleanup_expired_challenges() to service_role;
 
--- A shared transaction lock serializes both admission and actual INSERT capacity checks.
+-- Per-type transaction locks serialize admission and INSERT capacity checks without
+-- making anonymous authentication traffic block registration. Bound all lock waits.
 -- 300 authentication and 60 registration attempts per minute allow interactive retries while
 -- bounding anonymous lookup work. No caller-selected account key can lock out a particular victim.
 create function public.admit_passkey_challenge(p_type public.challenge_type)
 returns table (allowed boolean, retry_after_seconds integer)
-language plpgsql security invoker set search_path = '' as $$
+language plpgsql security invoker set search_path = '' set lock_timeout = '250ms' as $$
 declare
   budget public.passkey_challenge_admission%rowtype;
   observed_at timestamptz;
   maximum integer;
 begin
   if p_type is null then raise exception 'Challenge type is required' using errcode = '22023'; end if;
-  perform pg_advisory_xact_lock(545, 14);
+  perform pg_advisory_xact_lock(545, case when p_type = 'authentication' then 14 else 15 end);
   observed_at := clock_timestamp();
   select * into strict budget from public.passkey_challenge_admission where type = p_type for update;
   maximum := case when p_type = 'authentication' then 300 else 60 end;
@@ -123,9 +124,9 @@ grant execute on function public.admit_passkey_challenge(public.challenge_type) 
 -- Admission and insertion are separate network calls. The INSERT boundary must enforce capacity
 -- again so concurrent requests cannot overbook the last slot after their admission RPC returns.
 create or replace function public.enforce_passkey_challenge_capacity() returns trigger
-language plpgsql security invoker set search_path = '' as $$
+language plpgsql security invoker set search_path = '' set lock_timeout = '250ms' as $$
 begin
-  perform pg_advisory_xact_lock(545, 14);
+  perform pg_advisory_xact_lock(545, case when new.type = 'authentication' then 14 else 15 end);
   if new.expires_at > clock_timestamp() + interval '5 minutes 5 seconds'
      or octet_length(new.challenge) > 512 or octet_length(new.session_id) > 512 then
     raise exception 'Invalid challenge bounds' using errcode = '22023';
