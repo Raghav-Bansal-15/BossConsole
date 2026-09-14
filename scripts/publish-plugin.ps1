@@ -232,7 +232,11 @@ function Invoke-PluginStoreRequest {
         if ($statusCode -lt 200 -or $statusCode -ge 300) {
             return @{ Success = $false; Error = "HTTP $statusCode"; StatusCode = $statusCode; Data = $null }
         }
-        $data = if ($response.Content) { $response.Content | ConvertFrom-Json } else { $null }
+        $content = $response.Content
+        if ($content -is [byte[]]) {
+            $content = [System.Text.Encoding]::UTF8.GetString($content)
+        }
+        $data = if ($content) { $content | ConvertFrom-Json } else { $null }
         return @{
             Success = $true
             Data = $data
