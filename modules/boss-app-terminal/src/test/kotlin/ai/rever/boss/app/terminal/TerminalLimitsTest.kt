@@ -248,7 +248,9 @@ class TerminalLimitsTest {
                 }
             } finally {
                 val pid = root.resolve("descendant.pid")
-                if (Files.exists(pid)) ProcessHandle.of(Files.readString(pid).toLong()).ifPresent { it.destroyForcibly() }
+                if (Files.exists(pid)) {
+                    ProcessHandle.of(Files.readString(pid).toLong()).ifPresent { it.destroyForcibly() }
+                }
             }
         }
 
@@ -271,9 +273,15 @@ class TerminalLimitsTest {
                         .setSessionId(id)
                         .setData(ByteString.copyFrom(ByteArray(65_537)))
                         .build()
-                assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.sendInput(input) }.status.code)
+                assertEquals(
+                    Status.Code.INVALID_ARGUMENT,
+                    assertFailsWith<StatusException> { stub.sendInput(input) }.status.code,
+                )
                 val resize = ResizeRequest.newBuilder().setSessionId(id).setCols(0).setRows(24).build()
-                assertEquals(Status.Code.INVALID_ARGUMENT, assertFailsWith<StatusException> { stub.resize(resize) }.status.code)
+                assertEquals(
+                    Status.Code.INVALID_ARGUMENT,
+                    assertFailsWith<StatusException> { stub.resize(resize) }.status.code,
+                )
             }
         }
 

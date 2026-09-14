@@ -112,7 +112,9 @@ internal class TerminalSession(
             val cols = request.cols.takeIf { it > 0 } ?: 80
             val rows = request.rows.takeIf { it > 0 } ?: 24
             if (cols > 1000 || rows > 1000) {
-                throw Status.INVALID_ARGUMENT.withDescription("Terminal dimensions exceed the limit").asRuntimeException()
+                throw Status.INVALID_ARGUMENT
+                    .withDescription("Terminal dimensions exceed the limit")
+                    .asRuntimeException()
             }
             val builder = ProcessBuilder(command).directory(File(directory)).redirectErrorStream(true)
             builder.environment().apply {

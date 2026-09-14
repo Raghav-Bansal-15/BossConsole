@@ -53,7 +53,8 @@ internal class TerminalOutputBuffer {
                         if (start < oldest) {
                             throw Status.OUT_OF_RANGE
                                 .withDescription(
-                                    "Terminal output exceeded the replay window; reconnect to continue from retained output",
+                                    "Terminal output exceeded the replay window; " +
+                                        "reconnect to continue from retained output",
                                 ).asRuntimeException()
                         }
                         // A collector never keeps a second full replay window while the client is slow.

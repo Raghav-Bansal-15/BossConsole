@@ -40,7 +40,9 @@ class TerminalServiceImpl(
             val response =
                 withContext(Dispatchers.IO) {
                     if (request.serializedSize > 131_072) {
-                        throw Status.INVALID_ARGUMENT.withDescription("Terminal launch request exceeds 128 KiB").asRuntimeException()
+                        throw Status.INVALID_ARGUMENT
+                            .withDescription("Terminal launch request exceeds 128 KiB")
+                            .asRuntimeException()
                     }
                     currentCoroutineContext().ensureActive()
                     // Shutdown cannot overlook an admitted launch between process creation and registration.
