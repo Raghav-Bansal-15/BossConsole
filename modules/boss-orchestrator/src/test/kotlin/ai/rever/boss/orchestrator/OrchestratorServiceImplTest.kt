@@ -114,6 +114,39 @@ class OrchestratorServiceImplTest {
         }
 
     @Test
+    fun `oversized proposals record a failed outcome without consuming approval capacity`() =
+        runTest {
+            val ai =
+                object : AiRepairClient {
+                    override suspend fun proposeSourceFix(
+                        rootCause: String,
+                        sourceFiles: Map<String, String>,
+                        stackTrace: String,
+                        errorMessage: String,
+                    ) = SourceFixProposal("x".repeat(140_000), emptyList())
+
+                    override suspend fun proposeConfigFix(
+                        processId: String,
+                        rootCause: String,
+                        suggestedFix: String?,
+                        errorMessage: String,
+                    ): ConfigFixProposal? = null
+                }
+            val repair = RepairEngine(CrashAnalyzer(), snapshots, ai, dataDir.absolutePath) { _, _ -> }
+            val service = OrchestratorServiceImpl(repair, pendingLimit = 1)
+            val failure =
+                assertFailsWith<StatusRuntimeException> {
+                    service.reportFailure(report("oversized", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+                }
+            assertEquals(Status.Code.RESOURCE_EXHAUSTED, failure.status.code)
+            val outcome = service.getRepairHistory(RepairHistoryRequest.getDefaultInstance()).entriesList.single()
+            assertFalse(outcome.success)
+            assertTrue(outcome.description.contains("size limit"))
+            assertFalse(service.approveRepair(approval(outcome.repairId)).applied)
+            service.reportFailure(report("later", RepairStrategy.REPAIR_STRATEGY_RESTART))
+        }
+
+    @Test
     fun `completed history is bounded without evicting pending proposals`() =
         runTest {
             val service = OrchestratorServiceImpl(engine(), historyLimit = 3, pendingLimit = 2)
