@@ -10,7 +10,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -44,7 +43,7 @@ class WorkspaceServiceImplTest {
             assertTrue(record.mkdir())
             record.resolve("sentinel").writeText("untouched")
 
-            assertFailsWith<IOException> {
+            assertFailsWith<StatusRuntimeException> {
                 service.saveWorkspace(
                     SaveWorkspaceRequest
                         .newBuilder()
@@ -53,10 +52,10 @@ class WorkspaceServiceImplTest {
                         .build(),
                 )
             }
-            assertFailsWith<IOException> {
-                service.loadWorkspace(LoadWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
-            }
-            assertFailsWith<IOException> {
+            val opened = service.loadWorkspace(LoadWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
+            assertTrue(opened.found)
+            assertEquals(before.workspace, opened.workspace)
+            assertFailsWith<StatusRuntimeException> {
                 service.deleteWorkspace(DeleteWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
             }
             assertEquals(before, service.getCurrentWorkspace(Empty.getDefaultInstance()))
@@ -175,7 +174,7 @@ class WorkspaceServiceImplTest {
             Files.move(root.toPath(), root.toPath().resolveSibling("original"))
             root.mkdir()
             root.resolve("safe.json").writeText("sentinel")
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<StatusRuntimeException> {
                 service.saveWorkspace(SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
             }
             assertEquals("sentinel", root.resolve("safe.json").readText())
@@ -209,6 +208,29 @@ class WorkspaceServiceImplTest {
         }
 
     @Test
+    fun replacingHardLinkedRecordPreservesExternalFileAndIgnoresAbandonedTemporaryFiles() =
+        runBlocking {
+            val root = temporary.newFolder("workspaces")
+            val outside = temporary.newFile("outside.json")
+            outside.writeText("""{"id":"linked","name":"Outside"}""")
+            Files.createLink(root.resolve("linked.json").toPath(), outside.toPath())
+            root.resolve("abandoned.tmp").writeText("""{"id":"abandoned","name":"Incomplete"}""")
+            val service = WorkspaceServiceImpl(root)
+            assertEquals(listOf("linked"), service.getWorkspaces(Empty.getDefaultInstance()).workspacesList.map { it.id })
+            service.saveWorkspace(
+                SaveWorkspaceRequest
+                    .newBuilder()
+                    .setWorkspaceId("linked")
+                    .setName("Changed")
+                    .build(),
+            )
+            assertTrue(outside.readText().contains("Outside"))
+            assertTrue(root.resolve("linked.json").readText().contains("Changed"))
+            service.deleteWorkspace(DeleteWorkspaceRequest.newBuilder().setWorkspaceId("linked").build())
+            assertTrue(outside.readText().contains("Outside"))
+        }
+
+    @Test
     fun rejectsSymlinkedRecordsWithoutTouchingTheirTargets() =
         runBlocking {
             val root = temporary.newFolder("workspaces")
@@ -220,10 +242,10 @@ class WorkspaceServiceImplTest {
             Files.createSymbolicLink(link, outside.toPath())
             val service = WorkspaceServiceImpl(root)
             assertEquals(0, service.getWorkspaces(Empty.getDefaultInstance()).workspacesCount)
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<StatusRuntimeException> {
                 service.saveWorkspace(SaveWorkspaceRequest.newBuilder().setWorkspaceId("linked").build())
             }
-            assertFailsWith<IllegalStateException> {
+            assertFailsWith<StatusRuntimeException> {
                 service.deleteWorkspace(DeleteWorkspaceRequest.newBuilder().setWorkspaceId("linked").build())
             }
             assertTrue(outside.readText().contains("Outside"))

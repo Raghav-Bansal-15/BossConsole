@@ -14,13 +14,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.StandardOpenOption.READ
-import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.StandardOpenOption.WRITE
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -55,10 +57,7 @@ class WorkspaceServiceImpl(
     private val storageRoot = Files.createDirectories(storageDirectory.toPath()).toRealPath()
     private val storageIdentity = directoryIdentity()
 
-    private fun directoryIdentity(): Any? =
-        Files
-            .readAttributes(storageRoot, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
-            .fileKey()
+    private fun directoryIdentity(): Any = WorkspaceDirectoryIdentity.read(storageRoot)
 
     private val mutations = Mutex()
     private val workspaces = ConcurrentHashMap<String, WorkspaceInfo>()
@@ -79,16 +78,18 @@ class WorkspaceServiceImpl(
         }
     }
 
-    private fun workspacePath(id: String): Path {
+    private fun workspacePath(
+        id: String,
+        aliasStatus: Status = Status.ALREADY_EXISTS,
+    ): Path {
         validateId(id)
-        check(Files.isDirectory(storageRoot, NOFOLLOW_LINKS) && storageRoot.toRealPath() == storageRoot) {
-            "Workspace storage directory changed"
-        }
-        check(directoryIdentity() == storageIdentity) {
-            "Workspace storage directory was replaced"
-        }
+        storageGuard(
+            Files.isDirectory(storageRoot, NOFOLLOW_LINKS) && storageRoot.toRealPath() == storageRoot,
+            "Workspace storage directory changed",
+        )
+        storageGuard(directoryIdentity() == storageIdentity, "Workspace storage directory was replaced")
         val target = storageRoot.resolve("$id.json")
-        check(!Files.isSymbolicLink(target)) { "Workspace file must not be a symbolic link" }
+        storageGuard(!Files.isSymbolicLink(target), "Workspace file must not be a symbolic link")
         if (Files.exists(target, NOFOLLOW_LINKS)) {
             val alias =
                 workspaces.keys.any { storedId ->
@@ -97,7 +98,7 @@ class WorkspaceServiceImpl(
                     storedId != id && exists && Files.isSameFile(storedPath, target)
                 }
             if (alias) {
-                throw Status.ALREADY_EXISTS.withDescription("Workspace ID already exists").asRuntimeException()
+                throw aliasStatus.withDescription("Workspace ID aliases another record").asRuntimeException()
             }
         }
         return target
@@ -145,6 +146,7 @@ class WorkspaceServiceImpl(
                     metadata = ws.metadataMap,
                 )
             Files.writeString(temporary, json.encodeToString(pw))
+            FileChannel.open(temporary, WRITE).use { it.force(true) }
             // Replacement never follows an existing file link or truncates an old record.
             Files.move(temporary, target, ATOMIC_MOVE, REPLACE_EXISTING)
         } finally {
@@ -153,7 +155,7 @@ class WorkspaceServiceImpl(
     }
 
     private fun deleteFromDisk(workspaceId: String) {
-        Files.deleteIfExists(workspacePath(workspaceId))
+        Files.deleteIfExists(workspacePath(workspaceId, Status.FAILED_PRECONDITION))
     }
 
     private fun PersistedWorkspace.toProto(): WorkspaceInfo =
@@ -169,7 +171,29 @@ class WorkspaceServiceImpl(
             .putAllMetadata(metadata)
             .build()
 
-    private suspend fun <T> mutate(action: () -> T): T = withContext(Dispatchers.IO) { mutations.withLock { action() } }
+    private fun storageGuard(
+        valid: Boolean,
+        description: String,
+    ) {
+        if (!valid) {
+            logger.warn(description)
+            throw Status.FAILED_PRECONDITION.withDescription(description).asRuntimeException()
+        }
+    }
+
+    // Lock acquisition is cancellable. Once admitted, non-suspending disk and memory changes
+    // complete together before releasing the lock, even if the caller cancels during I/O.
+    private suspend fun <T> mutate(action: () -> T): T =
+        withContext(Dispatchers.IO) {
+            mutations.withLock {
+                try {
+                    action()
+                } catch (failure: IOException) {
+                    logger.warn("Workspace persistence failed ({})", failure.javaClass.simpleName)
+                    throw Status.INTERNAL.withDescription("Workspace persistence failed").asRuntimeException()
+                }
+            }
+        }
 
     // ---- gRPC method implementations ----
 
@@ -234,13 +258,23 @@ class WorkspaceServiceImpl(
             if (ws != null) {
                 val now = System.currentTimeMillis()
                 val updated = ws.toBuilder().setLastOpenedAt(now).build()
-                saveToDisk(updated)
-                workspaces[ws.id] = updated
-                currentWorkspaceFlow.value = updated
+                // Validate before degrading an optional timestamp write: a replaced directory
+                // or linked record is still a refusal, never a successful cached open.
+                workspacePath(ws.id)
+                val opened =
+                    try {
+                        saveToDisk(updated)
+                        updated
+                    } catch (failure: IOException) {
+                        logger.warn("Workspace timestamp could not be saved ({})", failure.javaClass.simpleName)
+                        ws
+                    }
+                workspaces[ws.id] = opened
+                currentWorkspaceFlow.value = opened
                 return@mutate WorkspaceResponse
                     .newBuilder()
                     .setFound(true)
-                    .setWorkspace(updated)
+                    .setWorkspace(opened)
                     .build()
             }
 
