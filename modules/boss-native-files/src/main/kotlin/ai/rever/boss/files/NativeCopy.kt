@@ -129,7 +129,9 @@ internal object PosixCopy {
     ) {
         Memory(256).use { stat ->
             PosixApi.check(
-                PosixApi.library.getFunction("fstat${PosixApi.inodeSuffix}").invokeInt(
+                PosixApi.stat(
+                    "fstat${PosixApi.inodeSuffix}",
+                    "__fxstat",
                     arrayOf<Any>(source, stat),
                 ),
                 "Inspect copy attributes",

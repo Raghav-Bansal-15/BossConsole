@@ -58,7 +58,7 @@ internal object PosixApi {
         return result
     }
 
-    private fun stat(
+    fun stat(
         name: String,
         legacy: String,
         arguments: Array<Any>,

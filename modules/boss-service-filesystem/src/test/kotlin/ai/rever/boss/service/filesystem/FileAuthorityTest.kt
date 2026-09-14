@@ -377,13 +377,14 @@ class FileAuthorityTest {
         }
 
     @Test
-    fun `recursive watch continues reporting descendants after a directory rename`() =
+    fun `recursive watch respects platform rename semantics and releases descendant handles`() =
         runBlocking {
             val watched = Files.createDirectory(root.resolve("watched"))
             val original = Files.createDirectory(watched.resolve("original"))
             Files.createDirectory(original.resolve("nested"))
             val renamed = watched.resolve("renamed")
-            val expected = renamed.resolve("nested/after-rename")
+            val windows = System.getProperty("os.name").startsWith("Windows")
+            val expected = (if (windows) original else renamed).resolve("nested/after-rename")
             withTimeout(10_000) {
                 val event =
                     async {
@@ -397,10 +398,19 @@ class FileAuthorityTest {
                             ).first { it.path == expected.toString() }
                     }
                 delay(500)
-                Files.move(original, renamed)
+                if (windows) {
+                    // NTFS refuses this rename while descendant notification handles are open.
+                    assertFailsWith<java.nio.file.AccessDeniedException> { Files.move(original, renamed) }
+                } else {
+                    Files.move(original, renamed)
+                }
                 delay(750)
                 Files.writeString(expected, "still watched")
                 assertEquals(expected.toString(), event.await().path)
+            }
+            if (windows) {
+                Files.move(original, renamed)
+                assertEquals("still watched", Files.readString(renamed.resolve("nested/after-rename")))
             }
         }
 
