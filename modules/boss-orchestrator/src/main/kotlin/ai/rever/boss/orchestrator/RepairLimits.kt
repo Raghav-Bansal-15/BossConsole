@@ -10,6 +10,7 @@ internal object RepairLimits {
     const val PATTERN_CHARS = 512
     const val REGEX_INSTRUCTIONS = 4096
     const val ERROR_TYPE_CHARS = 1024
+
     // 256 retained entries still fit the default 4 MiB gRPC receive limit with 3-byte UTF-8 text.
     const val HISTORY_DESCRIPTION_CHARS = 4096
     const val MESSAGE_CHARS = 8192

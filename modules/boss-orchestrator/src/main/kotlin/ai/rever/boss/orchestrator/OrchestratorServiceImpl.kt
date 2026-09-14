@@ -48,16 +48,9 @@ class OrchestratorServiceImpl(
 
     override suspend fun reportFailure(request: ProcessFailureReport): RepairAction {
         if (!analysisSlots.tryAcquire()) throw exhausted("Concurrent repair analysis limit reached; retry later")
-        var pendingReserved = false
-        var parked = false
         try {
-            if (!pendingSlots.tryAcquire()) throw exhausted("Resolve pending repairs before submitting more")
-            pendingReserved = true
-            val action = analyzeFailure(request)
-            parked = action.requiresUserApproval
-            return action
+            return analyzeFailure(request)
         } finally {
-            if (pendingReserved && !parked) pendingSlots.release()
             analysisSlots.release()
         }
     }
@@ -69,15 +62,43 @@ class OrchestratorServiceImpl(
         val repairId = UUID.randomUUID().toString()
         val strategy = outcomeToStrategy(outcome)
         val action = buildRepairAction(repairId, strategy, outcome, request)
-        if (action.serializedSize > 131_072) throw exhausted("Repair proposal exceeds the size limit")
+        if (action.serializedSize > 131_072) {
+            // Never truncate source code and offer the damaged proposal for approval.
+            val rejected =
+                action
+                    .toBuilder()
+                    .clearPatchSource()
+                    .clearPatchConfig()
+                    .clearEscalate()
+                    .setRequiresUserApproval(false)
+                    .setDescription("Repair proposal exceeds the size limit")
+                    .build()
+            recordAction(request, rejected, false)
+            throw exhausted(rejected.description)
+        }
+        // Analysis is separately bounded. Only proposals consume approval capacity, so abandoned
+        // proposals cannot disable automatic restart/reset. They remain explicitly rejectable;
+        // no timeout silently discards operator work or reclaims an executing approval.
+        if (action.requiresUserApproval && !pendingSlots.tryAcquire()) {
+            throw exhausted("Resolve pending proposals before requesting another proposal")
+        }
+        recordAction(request, action, outcome !is RepairOutcome.Failed)
+        return action
+    }
 
+    private fun recordAction(
+        request: ProcessFailureReport,
+        action: RepairAction,
+        success: Boolean,
+    ) {
+        val repairId = action.repairId
         val entry =
             RepairHistoryEntry
                 .newBuilder()
                 .setRepairId(repairId)
                 .setProcessId(request.processId)
-                .setStrategy(strategy)
-                .setSuccess(outcome !is RepairOutcome.Failed)
+                .setStrategy(action.strategy)
+                .setSuccess(success)
                 .setDescription(action.description.take(RepairLimits.HISTORY_DESCRIPTION_CHARS))
                 .setTimestamp(System.currentTimeMillis())
                 .build()
@@ -102,8 +123,6 @@ class OrchestratorServiceImpl(
                 .setRepairInitiated(action)
                 .build(),
         )
-
-        return action
     }
 
     override suspend fun getHealthDashboard(request: Empty): HealthDashboard {
@@ -150,10 +169,17 @@ class OrchestratorServiceImpl(
                     }
                 }.sortedByDescending { it.timestamp }
                 .let { if (request.limit > 0) it.take(request.limit) else it }
-        return RepairHistoryResponse
-            .newBuilder()
-            .addAllEntries(entries)
-            .build()
+        val response = RepairHistoryResponse.newBuilder()
+        var bytes = 0
+        for (entry in entries) {
+            val nextBytes = entry.serializedSize + 8 // tag and length prefix, conservatively bounded
+            if (bytes + nextBytes > 4 * 1024 * 1024 - 65_536) {
+                throw exhausted("Repair history exceeds the response limit; request fewer entries")
+            }
+            response.addEntries(entry)
+            bytes += nextBytes
+        }
+        return response.build()
     }
 
     override suspend fun approveRepair(request: RepairApproval): RepairApprovalResponse {

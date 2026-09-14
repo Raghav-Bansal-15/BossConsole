@@ -92,6 +92,28 @@ class OrchestratorServiceImplTest {
         }
 
     @Test
+    fun `custom large history refuses oversized responses and supports a smaller request`() =
+        runTest {
+            val service = OrchestratorServiceImpl(engine(), historyLimit = 512)
+            val original = report("界".repeat(200), RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG)
+            val manifest = original.manifest.toBuilder()
+            manifest.setRepairHints(
+                0,
+                manifest.getRepairHints(0).toBuilder().setSuggestedFix("界".repeat(RepairLimits.MESSAGE_CHARS)),
+            )
+            val request = original.toBuilder().setManifest(manifest).build()
+            repeat(512) { service.reportFailure(request) }
+            val failure =
+                assertFailsWith<StatusRuntimeException> {
+                    service.getRepairHistory(RepairHistoryRequest.getDefaultInstance())
+                }
+            assertEquals(Status.Code.RESOURCE_EXHAUSTED, failure.status.code)
+            val smaller = service.getRepairHistory(RepairHistoryRequest.newBuilder().setLimit(100).build())
+            assertEquals(100, smaller.entriesCount)
+            assertTrue(smaller.serializedSize < 4 * 1024 * 1024)
+        }
+
+    @Test
     fun `completed history is bounded without evicting pending proposals`() =
         runTest {
             val service = OrchestratorServiceImpl(engine(), historyLimit = 3, pendingLimit = 2)
@@ -101,6 +123,25 @@ class OrchestratorServiceImplTest {
             assertEquals(3, history.size)
             assertEquals(setOf("pending", "done-6", "done-7"), history.map { it.processId }.toSet())
             assertTrue(history.any { it.repairId == pending.repairId })
+        }
+
+    @Test
+    fun `abandoned proposals do not block automatic recovery and can be rejected`() =
+        runTest {
+            var restarts = 0
+            val service = OrchestratorServiceImpl(engine { _, _ -> restarts++ }, pendingLimit = 1)
+            val abandoned = service.reportFailure(report("proposal", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            repeat(3) { service.reportFailure(report("restart-$it", RepairStrategy.REPAIR_STRATEGY_RESTART)) }
+            assertEquals(3, restarts)
+            assertFailsWith<StatusRuntimeException> {
+                service.reportFailure(report("full", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            }
+            service.approveRepair(approval(abandoned.repairId).toBuilder().setApproved(false).build())
+            assertTrue(
+                service
+                    .reportFailure(report("replacement", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+                    .requiresUserApproval,
+            )
         }
 
     @Test
