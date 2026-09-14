@@ -98,7 +98,7 @@ class PublisherTest(unittest.TestCase):
 
     def test_publishes_serialized_metadata_and_streamed_artifact(self):
         result = self.run_publisher()
-        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn(TOKEN, self.observed_args)
         self.assertEqual(["GET", "POST", "POST", "PUT", "POST"], [r[0] for r in self.requests])
         self.assertEqual("/plugin%2Fa%3Fb%23c%20%25%E9%9B%AA", self.requests[0][1])
@@ -119,7 +119,7 @@ class PublisherTest(unittest.TestCase):
 
     def test_omits_unspecified_author_for_store_default(self):
         result = self.run_publisher(author="")
-        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("authorName", json.loads(self.requests[1][3]))
 
     def test_refuses_errors_without_creating_plugin_or_logging_body(self):
