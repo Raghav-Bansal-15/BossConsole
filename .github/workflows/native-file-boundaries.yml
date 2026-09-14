@@ -60,3 +60,20 @@ jobs:
             modules/boss-native-files/build/test-results/
             modules/boss-process-manager/build/test-results/
           retention-days: 7
+
+  old-glibc:
+    runs-on: ubuntu-latest
+    container: eclipse-temurin:17-jdk-focal
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify the pre-2.33 glibc stat ABI
+        shell: bash
+        run: |
+          ldd --version | head -1
+          ./gradlew :boss-native-files:test :boss-native-files:nativeSmokeJvm --console=plain --no-daemon
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-file-boundaries-glibc-2.31
+          path: modules/boss-native-files/build/test-results/
