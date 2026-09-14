@@ -39,9 +39,12 @@ class PublisherTest(unittest.TestCase):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 owner.requests.append((self.command, self.path, dict(self.headers), body))
                 if self.command == "GET":
-                    owner.observed_args = subprocess.check_output(
-                        ["ps", "-eo", "args"], text=True,
-                    )
+                    command = ["ps", "-eo", "args"]
+                    if os.name == "nt":
+                        command = ["powershell.exe", "-NoProfile", "-Command",
+                                   "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; "
+                                   "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine"]
+                    owner.observed_args = subprocess.check_output(command, text=True, encoding="utf-8", errors="replace")
                     status, value = owner.status, {"message": TOKEN}
                 elif self.path.endswith("/version"):
                     status, value = 201, {
@@ -89,7 +92,7 @@ class PublisherTest(unittest.TestCase):
                        "-Author", author, "-Tags", 'alpha,"quoted",雪',
                        "-HomepageUrl", "https://example.invalid/plugin", *extra]
         result = subprocess.run(command, env={**os.environ, "BOSS_PLUGIN_STORE_TOKEN": TOKEN},
-            cwd=self.temporary.name, capture_output=True, text=True, timeout=30)
+            cwd=self.temporary.name, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         self.assertNotIn(TOKEN, result.stdout + result.stderr)
         return result
 
