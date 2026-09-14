@@ -14,9 +14,26 @@ internal object PosixApi {
     val mac = Platform.isMac()
     val inodeSuffix = if (mac && Platform.ARCH == "x86-64") "\$INODE64" else ""
     val library = NativeLibrary.getInstance(Platform.C_LIBRARY_NAME, mapOf(Library.OPTION_STRING_ENCODING to "UTF-8"))
-    val noFollow = if (mac) 0x100 else 0x20000
+
+    // Linux arm64 uses different open flags from x86-64 (arch/arm64/include/uapi/asm/fcntl.h).
+    private val linuxArm64 = !mac && Platform.ARCH == "aarch64"
+    val noFollow =
+        if (mac) {
+            0x100
+        } else if (linuxArm64) {
+            0x8000
+        } else {
+            0x20000
+        }
     val closeOnExec = if (mac) 0x01000000 else 0x80000
-    val directory = if (mac) 0x00100000 else 0x10000
+    val directory =
+        if (mac) {
+            0x00100000
+        } else if (linuxArm64) {
+            0x4000
+        } else {
+            0x10000
+        }
     val search = if (mac) 0x40000000 else 0x200000 // O_SEARCH / O_PATH
     val nonBlocking = if (mac) 4 else 0x800
 
@@ -41,6 +58,23 @@ internal object PosixApi {
         return result
     }
 
+    private fun stat(
+        name: String,
+        legacy: String,
+        arguments: Array<Any>,
+    ): Int {
+        val function =
+            try {
+                library.getFunction(name)
+            } catch (missing: UnsatisfiedLinkError) {
+                // glibc before 2.33 exports the versioned x86-64 ABI instead. Version 1 uses
+                // the same 64-bit stat layout decoded below; never guess another architecture.
+                if (mac || Platform.ARCH != "x86-64") throw missing
+                return library.getFunction(legacy).invokeInt(arrayOf<Any>(1, *arguments))
+            }
+        return function.invokeInt(arguments)
+    }
+
     fun info(
         descriptor: Int,
         name: String? = null,
@@ -52,11 +86,11 @@ internal object PosixApi {
             val suffix = inodeSuffix
             val result =
                 if (name == null) {
-                    library.getFunction("fstat$suffix").invokeInt(arrayOf<Any>(descriptor, memory))
+                    stat("fstat$suffix", "__fxstat", arrayOf<Any>(descriptor, memory))
                 } else {
                     val flags = if (mac) 0x20 else 0x100 // AT_SYMLINK_NOFOLLOW
                     val arguments = arrayOf<Any>(descriptor, component(name), memory, flags)
-                    library.getFunction("fstatat$suffix").invokeInt(arguments)
+                    stat("fstatat$suffix", "__fxstatat", arguments)
                 }
             check(result, "Inspect file")
             val modeOffset =

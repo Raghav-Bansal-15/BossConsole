@@ -9,7 +9,9 @@ import java.io.IOException
 internal object WindowsSecurity {
     fun restrict(directory: Pointer) {
         privateDescriptor(directory) { descriptor ->
-            val arguments = arrayOf<Any>(directory, 0x80000004.toInt(), descriptor)
+            // Set owner and protected DACL together. A default/group-owned directory otherwise
+            // keeps its old owner and immediately fails our postcondition.
+            val arguments = arrayOf<Any>(directory, 0x80000005.toInt(), descriptor)
             val status = WindowsApi.nt.getFunction("NtSetSecurityObject").invokeInt(arguments)
             WindowsApi.checkStatus(status, "Set private directory permissions")
             WindowsPermissions.verify(directory, ownerSid())

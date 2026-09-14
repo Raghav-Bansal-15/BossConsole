@@ -114,23 +114,34 @@ internal class WindowsDirectory(
         WindowsOpen(handle(), source, null).use { request ->
             val entry = request.open(0x10080, 1, 0x200000)
             try {
-                if (overwrite) destination.prepareReplacement(entry, name)
-                WindowsRename.move(entry, destination.handle(), component(name), overwrite)
+                if (!overwrite || !destination.replaceDirectoryLink(entry, name)) {
+                    WindowsRename.move(entry, destination.handle(), component(name), overwrite)
+                }
             } finally {
                 WindowsApi.close(entry)
             }
         }
     }
 
-    private fun prepareReplacement(
+    private fun replaceDirectoryLink(
         source: Pointer,
         name: String,
-    ) {
-        val target = info(name) ?: return
-        if (!target.isLink || !target.isDirectory || target.identity == WindowsApi.info(source).identity) return
-        // Windows cannot replace a directory reparse entry through FILE_RENAME_INFORMATION.
-        // Delete only the entry; the type check rejects a concurrent replacement by a real directory.
-        delete(name)
+    ): Boolean {
+        val target = info(name) ?: return false
+        if (!target.isLink || !target.isDirectory || target.identity == WindowsApi.info(source).identity) return false
+        WindowsOpen(handle(), name, null).use { request ->
+            val held = request.open(0x10080, 1, 0x200000)
+            try {
+                val current = WindowsApi.info(held)
+                if (current.identity != target.identity || !current.isLink || !current.isDirectory) {
+                    throw java.io.IOException("Replacement entry changed")
+                }
+                WindowsReplacement.move(source, held, handle(), component(name))
+            } finally {
+                WindowsApi.close(held)
+            }
+        }
+        return true
     }
 
     override fun copyEntry(
@@ -160,7 +171,7 @@ internal class WindowsDirectory(
     @Synchronized
     override fun restrictToOwner() {
         WindowsOpen.reopen(handle()).use { request ->
-            val writable = request.open(0x60080, 1, 0x200001)
+            val writable = request.open(0xe0080, 1, 0x200001)
             try {
                 WindowsSecurity.restrict(writable)
             } finally {

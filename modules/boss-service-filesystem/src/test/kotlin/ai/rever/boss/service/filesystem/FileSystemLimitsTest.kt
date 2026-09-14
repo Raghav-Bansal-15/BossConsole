@@ -308,9 +308,9 @@ class FileSystemLimitsTest {
                 }
             // The message names the resolved location, not the requested one.
             assertEquals(
-                Status.Code.UNKNOWN,
+                Status.Code.PERMISSION_DENIED,
                 failure.status.code,
-                "the handler raises IllegalArgumentException, which gRPC surfaces as UNKNOWN",
+                "denied paths must remain distinguishable over the wire",
             )
             // The canonical spelling of the denylist is the alias that matters on macOS, where
             // `/etc` is `/private/etc`; elsewhere the symlink into it dangles and the scan simply

@@ -24,7 +24,8 @@ import kotlin.coroutines.CoroutineContext
 internal class FileWatchRegistry(
     private val access: FileAccess,
 ) {
-    private val slots = Semaphore(32)
+    // Shared across service instances: the scarce handles and native buffers are process-wide.
+    private val slots = WatchResources.streams
 
     fun watch(request: WatchFileChangesRequest): Flow<FileChangeEvent> =
         flow {
@@ -70,13 +71,13 @@ private data class ParentEntry(
 
 private class Registration(
     val directory: NativeDirectory,
-    val canonical: Path,
-    val visible: Path,
-    val parent: ParentEntry?,
-    val depth: Int,
+    var canonical: Path,
+    var visible: Path,
+    var parent: ParentEntry?,
+    var depth: Int,
     session: DirectoryWatchSession,
 ) {
-    private val identity = directory.identity
+    val identity = directory.identity
     val watch = directory.watch(session)
 
     fun present(): Boolean =
@@ -150,7 +151,13 @@ private class Registrations(
         context.ensureActive()
         enforceFileSystemLimit(depth <= FileSystemLimits.SCAN_DEPTH, "File watch depth limit reached")
         enforceFileSystemLimit(entries.size < 1024, "File watch directory limit reached")
-        return Registration(directory, canonical, visible, parent, depth, session).also(entries::add)
+        enforceFileSystemLimit(WatchResources.directories.tryAcquire(), "Process file watch limit reached")
+        try {
+            return Registration(directory, canonical, visible, parent, depth, session).also(entries::add)
+        } catch (failure: Throwable) {
+            WatchResources.directories.release()
+            throw failure
+        }
     }
 
     private fun scan(
@@ -176,6 +183,11 @@ private class Registrations(
         val existing = entries.firstOrNull { it.canonical == canonical }
         if (existing?.present() == true) return
         if (existing != null) remove(existing)
+        val sameDirectory = entries.firstOrNull { it.identity == info.identity }
+        if (sameDirectory != null) {
+            rebind(sameDirectory, parent, name)
+            return
+        }
         try {
             val child = parent.directory.child(name)
             var registered = false
@@ -196,6 +208,31 @@ private class Registrations(
         } catch (failure: IOException) {
             if (!disappeared(parent.directory, name, failure)) throw failure
         }
+    }
+
+    private fun rebind(
+        registration: Registration,
+        parent: Registration,
+        name: String,
+    ) {
+        val oldCanonical = registration.canonical
+        val oldVisible = registration.visible
+        val newCanonical = parent.canonical.resolve(name)
+        val newVisible = parent.visible.resolve(name)
+        val depthChange = parent.depth + 1 - registration.depth
+        val descendants = entries.filter { it.canonical.startsWith(oldCanonical) }
+        for (entry in descendants) {
+            policy.authorize(newCanonical.resolve(oldCanonical.relativize(entry.canonical)))
+            enforceFileSystemLimit(entry.depth + depthChange <= FileSystemLimits.SCAN_DEPTH, "File watch depth limit reached")
+        }
+        // Linux returns the same WatchKey for the same inode. Reuse its owner rather than
+        // creating an alias whose cancellation would cancel both registrations.
+        for (entry in descendants) {
+            entry.canonical = newCanonical.resolve(oldCanonical.relativize(entry.canonical))
+            entry.visible = newVisible.resolve(oldVisible.relativize(entry.visible))
+            entry.depth += depthChange
+        }
+        registration.parent = ParentEntry(parent.directory, name)
     }
 
     private fun disappeared(
@@ -223,14 +260,22 @@ private class Registrations(
 
     private fun remove(registration: Registration) {
         val removed = entries.filter { it.canonical.startsWith(registration.canonical) }.asReversed()
+        var failure: Exception? = null
         for (item in removed) {
             entries.remove(item)
             try {
-                item.watch.close()
+                try {
+                    item.watch.close()
+                } finally {
+                    if (item.directory !== root.directory) item.directory.close()
+                }
+            } catch (error: Exception) {
+                if (failure == null) failure = error else failure.addSuppressed(error)
             } finally {
-                if (item.directory !== root.directory) item.directory.close()
+                WatchResources.directories.release()
             }
         }
+        failure?.let { throw it }
     }
 
     override fun close() {
@@ -240,4 +285,10 @@ private class Registrations(
             session.close()
         }
     }
+}
+
+/** At most 128 held directories (8 MiB Windows buffers), shared by at most eight streams. */
+private object WatchResources {
+    val streams = Semaphore(8)
+    val directories = Semaphore(128)
 }

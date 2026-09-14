@@ -74,6 +74,57 @@ class FileAuthorityTest {
         }
 
     @Test
+    fun `recursive deletion handles wide directories and refuses excessive depth`() =
+        runBlocking {
+            val wide = Files.createDirectory(root.resolve("wide"))
+            repeat(400) { Files.writeString(wide.resolve("file-$it"), "fixture") }
+            service.deleteFile(
+                DeleteFileRequest
+                    .newBuilder()
+                    .setPath(wide.toString())
+                    .setRecursive(true)
+                    .build(),
+            )
+            assertFalse(Files.exists(wide))
+            val deep = Files.createDirectory(root.resolve("deep"))
+            var leaf = deep
+            repeat(FileSystemLimits.SCAN_DEPTH + 2) { leaf = Files.createDirectory(leaf.resolve("d")) }
+            Files.writeString(leaf.resolve("sentinel"), "preserved")
+            val failure =
+                assertFailsWith<io.grpc.StatusRuntimeException> {
+                    service.deleteFile(
+                        DeleteFileRequest
+                            .newBuilder()
+                            .setPath(deep.toString())
+                            .setRecursive(true)
+                            .build(),
+                    )
+                }
+            assertEquals(io.grpc.Status.Code.RESOURCE_EXHAUSTED, failure.status.code)
+            assertEquals("preserved", Files.readString(leaf.resolve("sentinel")))
+        }
+
+    @Test
+    fun `create failures and path denials carry usable grpc status codes`() =
+        runBlocking {
+            val missing =
+                assertFailsWith<io.grpc.StatusException> {
+                    service.createFile(CreateFileRequest.newBuilder().setPath(root.resolve("missing/file").toString()).build())
+                }
+            assertEquals(io.grpc.Status.Code.NOT_FOUND, missing.status.code)
+            val denied =
+                assertFailsWith<FilePathDeniedException> {
+                    service.createFile(CreateFileRequest.newBuilder().setPath(blocked.resolve("file").toString()).build())
+                }
+            assertEquals(
+                io.grpc.Status.Code.PERMISSION_DENIED,
+                io.grpc.Status
+                    .fromThrowable(denied)
+                    .code,
+            )
+        }
+
+    @Test
     fun `recursive deletion unlinks descendant directory links and preserves their targets`() =
         runBlocking {
             Files.writeString(blocked.resolve("sentinel"), "protected")
@@ -304,6 +355,34 @@ class FileAuthorityTest {
                 assertFalse(event.isCompleted, "A watch must not observe the replacement target")
                 Files.writeString(moved.resolve("tree/allowed"), "allowed")
                 assertEquals(tree.resolve("allowed").toString(), event.await().path)
+            }
+        }
+
+    @Test
+    fun `recursive watch continues reporting descendants after a directory rename`() =
+        runBlocking {
+            val watched = Files.createDirectory(root.resolve("watched"))
+            val original = Files.createDirectory(watched.resolve("original"))
+            Files.createDirectory(original.resolve("nested"))
+            val renamed = watched.resolve("renamed")
+            val expected = renamed.resolve("nested/after-rename")
+            withTimeout(10_000) {
+                val event =
+                    async {
+                        service
+                            .watchFileChanges(
+                                WatchFileChangesRequest
+                                    .newBuilder()
+                                    .setPath(watched.toString())
+                                    .setRecursive(true)
+                                    .build(),
+                            ).first { it.path == expected.toString() }
+                    }
+                delay(500)
+                Files.move(original, renamed)
+                delay(750)
+                Files.writeString(expected, "still watched")
+                assertEquals(expected.toString(), event.await().path)
             }
         }
 

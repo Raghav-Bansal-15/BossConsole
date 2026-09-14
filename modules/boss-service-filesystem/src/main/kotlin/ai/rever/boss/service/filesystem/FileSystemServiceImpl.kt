@@ -146,23 +146,28 @@ class FileSystemServiceImpl internal constructor(
 
     override suspend fun createFile(request: CreateFileRequest): Empty =
         withContext(Dispatchers.IO) {
-            access.entry(request.path, request.createParents || request.isDirectory).use { entry ->
-                // Preserve createFile's existing idempotence when the entry already exists.
-                if (entry.parent.info(entry.name) == null) {
-                    try {
-                        if (request.isDirectory) {
-                            entry.parent
-                                .child(entry.name, create = true, permissions = CreationPermissions.INHERIT)
-                                .close()
-                        } else {
-                            entry.parent
-                                .file(entry.name, create = true, permissions = CreationPermissions.INHERIT)
-                                .close()
+            try {
+                access.entry(request.path, request.createParents || request.isDirectory).use { entry ->
+                    // Directory creation retains the legacy mkdirs behavior, including parent creation.
+                    // Preserve createFile's existing idempotence when the entry already exists.
+                    if (entry.parent.info(entry.name) == null) {
+                        try {
+                            if (request.isDirectory) {
+                                entry.parent
+                                    .child(entry.name, create = true, permissions = CreationPermissions.INHERIT)
+                                    .close()
+                            } else {
+                                entry.parent
+                                    .file(entry.name, create = true, permissions = CreationPermissions.INHERIT)
+                                    .close()
+                            }
+                        } catch (_: FileAlreadyExistsException) {
+                            // Another creator won the exclusive create. Its entry is left intact.
                         }
-                    } catch (_: FileAlreadyExistsException) {
-                        // Another creator won the exclusive create. Its entry is left intact.
                     }
                 }
+            } catch (failure: IOException) {
+                throw fileStatus(failure, "Create", request.path)
             }
             Empty.getDefaultInstance()
         }
@@ -187,16 +192,27 @@ class FileSystemServiceImpl internal constructor(
         path: Path,
         recursive: Boolean,
         context: CoroutineContext,
+        work: DeleteWork = DeleteWork(),
+        depth: Int = 0,
     ) {
         context.ensureActive()
+        enforceFileSystemLimit(depth <= FileSystemLimits.SCAN_DEPTH, "Recursive delete depth limit reached")
+        enforceFileSystemLimit(++work.visited <= FileSystemLimits.SCAN_ENTRIES, "Recursive delete work limit reached")
         access.policy.authorize(path)
         val info = parent.info(name) ?: throw NoSuchFileException(path.toString())
         val directory = info.isDirectory && !info.isLink
         if (recursive && directory) {
             parent.child(name).use { child ->
-                child.entries { descendant ->
-                    delete(child, descendant, path.resolve(descendant), true, context)
-                    true
+                // End each enumeration before unlinking. Restart from the held directory so
+                // mutations cannot make a live readdir stream silently skip descendants.
+                while (true) {
+                    var next: String? = null
+                    child.entries { descendant ->
+                        next = descendant
+                        false
+                    }
+                    val descendant = next ?: break
+                    delete(child, descendant, path.resolve(descendant), true, context, work, depth + 1)
                 }
             }
         }
@@ -239,8 +255,10 @@ class FileSystemServiceImpl internal constructor(
         try {
             source.parent.copyEntry(source.name, destination.parent, temporary)
             currentCoroutineContext().ensureActive()
-            check(source.parent.info(source.name)?.identity == info.identity) {
-                "Source changed during cross-volume move"
+            if (source.parent.info(source.name)?.identity != info.identity) {
+                throw Status.FAILED_PRECONDITION
+                    .withDescription("Source changed during cross-volume move")
+                    .asRuntimeException()
             }
             destination.parent.move(temporary, destination.parent, destination.name, overwrite)
             installed = true
@@ -273,3 +291,7 @@ private fun fileStatus(
         }
     return StatusException(code.withDescription("$operation failed: $path (${failure.message})").withCause(failure))
 }
+
+private class DeleteWork(
+    var visited: Int = 0,
+)

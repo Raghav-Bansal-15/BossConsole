@@ -67,4 +67,7 @@ internal class FilePathPolicy(
 
 internal class FilePathDeniedException(
     path: Path,
-) : IllegalArgumentException("Access to system path is not allowed: $path")
+) : io.grpc.StatusRuntimeException(
+        io.grpc.Status.PERMISSION_DENIED
+            .withDescription("Access to system path is not allowed: $path"),
+    )
