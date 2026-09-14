@@ -178,7 +178,8 @@ class FileSystemServiceImpl internal constructor(
             try {
                 access.entry(request.path).use { entry ->
                     access.policy.authorizeMutation(entry.canonical)
-                    delete(entry.parent, entry.name, entry.canonical, request.recursive, currentCoroutineContext())
+                    val work = DeleteWork(currentCoroutineContext(), request.recursive)
+                    delete(entry.parent, entry.name, entry.canonical, work)
                 }
             } catch (failure: IOException) {
                 throw fileStatus(failure, "Delete", request.path)
@@ -190,18 +191,16 @@ class FileSystemServiceImpl internal constructor(
         parent: NativeDirectory,
         name: String,
         path: Path,
-        recursive: Boolean,
-        context: CoroutineContext,
-        work: DeleteWork = DeleteWork(),
+        work: DeleteWork,
         depth: Int = 0,
     ) {
-        context.ensureActive()
+        work.context.ensureActive()
         enforceFileSystemLimit(depth <= FileSystemLimits.SCAN_DEPTH, "Recursive delete depth limit reached")
         enforceFileSystemLimit(++work.visited <= FileSystemLimits.SCAN_ENTRIES, "Recursive delete work limit reached")
         access.policy.authorize(path)
         val info = parent.info(name) ?: throw NoSuchFileException(path.toString())
         val directory = info.isDirectory && !info.isLink
-        if (recursive && directory) {
+        if (work.recursive && directory) {
             parent.child(name).use { child ->
                 // End each enumeration before unlinking. Restart from the held directory so
                 // mutations cannot make a live readdir stream silently skip descendants.
@@ -212,7 +211,7 @@ class FileSystemServiceImpl internal constructor(
                         false
                     }
                     val descendant = next ?: break
-                    delete(child, descendant, path.resolve(descendant), true, context, work, depth + 1)
+                    delete(child, descendant, path.resolve(descendant), work, depth + 1)
                 }
             }
         }
@@ -293,5 +292,7 @@ private fun fileStatus(
 }
 
 private class DeleteWork(
+    val context: CoroutineContext,
+    val recursive: Boolean,
     var visited: Int = 0,
 )

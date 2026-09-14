@@ -109,12 +109,15 @@ class FileAuthorityTest {
         runBlocking {
             val missing =
                 assertFailsWith<io.grpc.StatusException> {
-                    service.createFile(CreateFileRequest.newBuilder().setPath(root.resolve("missing/file").toString()).build())
+                    val path = root.resolve("missing/file").toString()
+                    val request = CreateFileRequest.newBuilder().setPath(path).build()
+                    service.createFile(request)
                 }
             assertEquals(io.grpc.Status.Code.NOT_FOUND, missing.status.code)
             val denied =
                 assertFailsWith<FilePathDeniedException> {
-                    service.createFile(CreateFileRequest.newBuilder().setPath(blocked.resolve("file").toString()).build())
+                    val path = blocked.resolve("file").toString()
+                    service.createFile(CreateFileRequest.newBuilder().setPath(path).build())
                 }
             assertEquals(
                 io.grpc.Status.Code.PERMISSION_DENIED,

@@ -15,10 +15,13 @@ import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
 import io.grpc.Status
 import io.grpc.StatusException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -130,8 +133,12 @@ class FileSystemLimitsTest {
     @Test
     fun `recursive watch survives disappearing descendants and continues observing the root`() =
         runBlocking {
-            withTimeout(15_000) {
+            // Windows CI spent 55 seconds in synchronous fixture churn. Give fixture I/O
+            // its own budget; retain a separate 15-second deadline for actual watch delivery.
+            withTimeout(90_000) {
                 val sentinel = root.resolve("sentinel")
+                val readiness = root.resolve("watch-ready")
+                val ready = CompletableDeferred<Unit>()
                 val received =
                     async {
                         stub
@@ -141,19 +148,32 @@ class FileSystemLimitsTest {
                                     .setPath(root.toString())
                                     .setRecursive(true)
                                     .build(),
-                            ).first { it.path == sentinel.toString() }
+                            ).first {
+                                if (it.path == readiness.toString()) ready.complete(Unit)
+                                it.path == sentinel.toString()
+                            }
                     }
-                repeat(100) { index ->
-                    val transient = Files.createDirectory(root.resolve("transient-$index"))
-                    Files.createDirectory(transient.resolve("child"))
-                    transient.toFile().deleteRecursively()
-                    delay(5)
+                withTimeout(15_000) {
+                    while (!ready.isCompleted) {
+                        withContext(Dispatchers.IO) { Files.writeString(readiness, "ready") }
+                        delay(25)
+                    }
                 }
-                while (!received.isCompleted) {
-                    Files.writeString(sentinel, "still watching")
-                    delay(50)
+                withContext(Dispatchers.IO) {
+                    repeat(100) { index ->
+                        val transient = Files.createDirectory(root.resolve("transient-$index"))
+                        Files.createDirectory(transient.resolve("child"))
+                        transient.toFile().deleteRecursively()
+                        delay(5)
+                    }
                 }
-                assertEquals(sentinel.toString(), received.await().path)
+                withTimeout(15_000) {
+                    while (!received.isCompleted) {
+                        withContext(Dispatchers.IO) { Files.writeString(sentinel, "still watching") }
+                        delay(50)
+                    }
+                    assertEquals(sentinel.toString(), received.await().path)
+                }
             }
         }
 

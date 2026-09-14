@@ -127,8 +127,8 @@ internal class WindowsDirectory(
         source: Pointer,
         name: String,
     ): Boolean {
-        val target = info(name) ?: return false
-        if (!target.isLink || !target.isDirectory || target.identity == WindowsApi.info(source).identity) return false
+        val target = info(name)?.takeIf { it.isLink && it.isDirectory }
+        if (target == null || target.identity == WindowsApi.info(source).identity) return false
         WindowsOpen(handle(), name, null).use { request ->
             val held = request.open(0x10080, 1, 0x200000)
             try {

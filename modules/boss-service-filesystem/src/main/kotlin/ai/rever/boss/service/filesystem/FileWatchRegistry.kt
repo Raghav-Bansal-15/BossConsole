@@ -152,11 +152,14 @@ private class Registrations(
         enforceFileSystemLimit(depth <= FileSystemLimits.SCAN_DEPTH, "File watch depth limit reached")
         enforceFileSystemLimit(entries.size < 1024, "File watch directory limit reached")
         enforceFileSystemLimit(WatchResources.directories.tryAcquire(), "Process file watch limit reached")
+        var registered = false
         try {
-            return Registration(directory, canonical, visible, parent, depth, session).also(entries::add)
-        } catch (failure: Throwable) {
-            WatchResources.directories.release()
-            throw failure
+            return Registration(directory, canonical, visible, parent, depth, session).also {
+                entries.add(it)
+                registered = true
+            }
+        } finally {
+            if (!registered) WatchResources.directories.release()
         }
     }
 
@@ -179,11 +182,11 @@ private class Registrations(
     ) {
         val canonical = parent.canonical.resolve(name)
         val info = if (policy.allowed(canonical)) parent.directory.info(name) else null
-        if (info == null || !info.isDirectory || info.isLink) return
+        val directory = info?.takeIf { it.isDirectory && !it.isLink }
         val existing = entries.firstOrNull { it.canonical == canonical }
-        if (existing?.present() == true) return
+        if (directory == null || existing?.present() == true) return
         if (existing != null) remove(existing)
-        val sameDirectory = entries.firstOrNull { it.identity == info.identity }
+        val sameDirectory = entries.firstOrNull { it.identity == directory.identity }
         if (sameDirectory != null) {
             rebind(sameDirectory, parent, name)
             return
@@ -223,7 +226,10 @@ private class Registrations(
         val descendants = entries.filter { it.canonical.startsWith(oldCanonical) }
         for (entry in descendants) {
             policy.authorize(newCanonical.resolve(oldCanonical.relativize(entry.canonical)))
-            enforceFileSystemLimit(entry.depth + depthChange <= FileSystemLimits.SCAN_DEPTH, "File watch depth limit reached")
+            enforceFileSystemLimit(
+                entry.depth + depthChange <= FileSystemLimits.SCAN_DEPTH,
+                "File watch depth limit reached",
+            )
         }
         // Linux returns the same WatchKey for the same inode. Reuse its owner rather than
         // creating an alias whose cancellation would cancel both registrations.
@@ -260,16 +266,12 @@ private class Registrations(
 
     private fun remove(registration: Registration) {
         val removed = entries.filter { it.canonical.startsWith(registration.canonical) }.asReversed()
-        var failure: Exception? = null
+        var failure: IOException? = null
         for (item in removed) {
             entries.remove(item)
             try {
-                try {
-                    item.watch.close()
-                } finally {
-                    if (item.directory !== root.directory) item.directory.close()
-                }
-            } catch (error: Exception) {
+                closeRegistration(item, root.directory)
+            } catch (error: IOException) {
                 if (failure == null) failure = error else failure.addSuppressed(error)
             } finally {
                 WatchResources.directories.release()
@@ -291,4 +293,15 @@ private class Registrations(
 private object WatchResources {
     val streams = Semaphore(8)
     val directories = Semaphore(128)
+}
+
+private fun closeRegistration(
+    item: Registration,
+    root: NativeDirectory,
+) {
+    try {
+        item.watch.close()
+    } finally {
+        if (item.directory !== root) item.directory.close()
+    }
 }

@@ -70,7 +70,8 @@ internal object PosixApi {
                 // glibc before 2.33 exports the versioned x86-64 ABI instead. Version 1 uses
                 // the same 64-bit stat layout decoded below; never guess another architecture.
                 if (mac || Platform.ARCH != "x86-64") throw missing
-                return library.getFunction(legacy).invokeInt(arrayOf<Any>(1, *arguments))
+                val versioned = Array<Any>(arguments.size + 1) { if (it == 0) 1 else arguments[it - 1] }
+                return library.getFunction(legacy).invokeInt(versioned)
             }
         return function.invokeInt(arguments)
     }
