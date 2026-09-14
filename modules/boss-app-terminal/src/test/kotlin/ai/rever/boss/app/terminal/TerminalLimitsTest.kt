@@ -242,9 +242,21 @@ class TerminalLimitsTest {
                     val descendant =
                         ProcessHandle.of(Files.readString(root.resolve("descendant.pid")).toLong()).orElseThrow()
                     assertTrue(descendant.isAlive)
-                    assertTrue(stub.streamOutput(stream(id)).toList().last().isExit)
+                    assertTrue(
+                        stub
+                            .streamOutput(stream(id))
+                            .toList()
+                            .last()
+                            .isExit,
+                    )
                     val replacement = start("echo")
-                    assertTrue(stub.streamOutput(stream(replacement)).toList().last().isExit)
+                    assertTrue(
+                        stub
+                            .streamOutput(stream(replacement))
+                            .toList()
+                            .last()
+                            .isExit,
+                    )
                 }
             } finally {
                 val pid = root.resolve("descendant.pid")
@@ -277,7 +289,13 @@ class TerminalLimitsTest {
                     Status.Code.INVALID_ARGUMENT,
                     assertFailsWith<StatusException> { stub.sendInput(input) }.status.code,
                 )
-                val resize = ResizeRequest.newBuilder().setSessionId(id).setCols(0).setRows(24).build()
+                val resize =
+                    ResizeRequest
+                        .newBuilder()
+                        .setSessionId(id)
+                        .setCols(0)
+                        .setRows(24)
+                        .build()
                 assertEquals(
                     Status.Code.INVALID_ARGUMENT,
                     assertFailsWith<StatusException> { stub.resize(resize) }.status.code,
