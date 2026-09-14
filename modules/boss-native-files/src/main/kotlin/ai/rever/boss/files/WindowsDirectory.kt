@@ -113,7 +113,7 @@ internal class WindowsDirectory(
     @Synchronized
     override fun restrictToOwner() {
         WindowsOpen.reopen(handle()).use { request ->
-            val writable = request.open(0x60080, 1, 0x200001)
+            val writable = request.open(0xe0080, 1, 0x200001) // READ_CONTROL | WRITE_DAC | WRITE_OWNER | attributes
             try {
                 WindowsSecurity.restrict(writable)
             } finally {

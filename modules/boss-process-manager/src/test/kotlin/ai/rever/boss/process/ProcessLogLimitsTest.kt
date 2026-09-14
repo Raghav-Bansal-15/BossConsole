@@ -73,7 +73,8 @@ class ProcessLogLimitsTest {
                 LogTestProcess::class.java.protectionDomain.codeSource.location
                     .toURI(),
             ).absolutePath
-        for (failure in listOf(IOException("disk"), IllegalArgumentException("permissions"), UnsatisfiedLinkError("symbol"))) {
+        val failures = listOf(IOException("disk"), IllegalArgumentException("permissions"), UnsatisfiedLinkError("symbol"))
+        for (failure in failures) {
             val process = ProcessBuilder(java, "-cp", classes, LogTestProcess::class.java.name).start()
             try {
                 var attempts = 0
