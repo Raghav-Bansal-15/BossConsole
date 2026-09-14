@@ -216,7 +216,8 @@ class WorkspaceServiceImplTest {
             Files.createLink(root.resolve("linked.json").toPath(), outside.toPath())
             root.resolve("abandoned.tmp").writeText("""{"id":"abandoned","name":"Incomplete"}""")
             val service = WorkspaceServiceImpl(root)
-            assertEquals(listOf("linked"), service.getWorkspaces(Empty.getDefaultInstance()).workspacesList.map { it.id })
+            val storedIds = service.getWorkspaces(Empty.getDefaultInstance()).workspacesList.map { it.id }
+            assertEquals(listOf("linked"), storedIds)
             service.saveWorkspace(
                 SaveWorkspaceRequest
                     .newBuilder()

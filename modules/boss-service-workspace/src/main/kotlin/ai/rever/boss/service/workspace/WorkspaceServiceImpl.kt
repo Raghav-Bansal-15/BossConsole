@@ -256,19 +256,7 @@ class WorkspaceServiceImpl(
                 }
 
             if (ws != null) {
-                val now = System.currentTimeMillis()
-                val updated = ws.toBuilder().setLastOpenedAt(now).build()
-                // Validate before degrading an optional timestamp write: a replaced directory
-                // or linked record is still a refusal, never a successful cached open.
-                workspacePath(ws.id)
-                val opened =
-                    try {
-                        saveToDisk(updated)
-                        updated
-                    } catch (failure: IOException) {
-                        logger.warn("Workspace timestamp could not be saved ({})", failure.javaClass.simpleName)
-                        ws
-                    }
+                val opened = updateLastOpened(ws)
                 workspaces[ws.id] = opened
                 currentWorkspaceFlow.value = opened
                 return@mutate WorkspaceResponse
@@ -306,6 +294,21 @@ class WorkspaceServiceImpl(
                 .setErrorMessage("Workspace not found: ${request.workspaceId}")
                 .build()
         }
+
+    private fun updateLastOpened(ws: WorkspaceInfo): WorkspaceInfo {
+        val now = System.currentTimeMillis()
+        val updated = ws.toBuilder().setLastOpenedAt(now).build()
+        // Validate before degrading an optional timestamp write: a replaced directory
+        // or linked record is still a refusal, never a successful cached open.
+        workspacePath(ws.id)
+        return try {
+            saveToDisk(updated)
+            updated
+        } catch (failure: IOException) {
+            logger.warn("Workspace timestamp could not be saved ({})", failure.javaClass.simpleName)
+            ws
+        }
+    }
 
     override suspend fun saveWorkspace(request: SaveWorkspaceRequest): WorkspaceResponse =
         mutate {
