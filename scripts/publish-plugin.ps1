@@ -128,8 +128,8 @@ function Write-Step {
 
 function Get-Sha256Hash {
     param([string]$FilePath)
-    $hash = Get-FileHash -Path $FilePath -Algorithm SHA256
-    return $hash.Hash.ToLower()
+    $hash = Get-FileHash -LiteralPath $FilePath -Algorithm SHA256 -ErrorAction Stop
+    return [string]$hash.Hash.ToLowerInvariant()
 }
 
 function Get-ManifestValue {
@@ -215,11 +215,18 @@ function Invoke-PluginStoreRequest {
         }
     }
     try {
-        $response = Invoke-RestMethod @params
+        # Windows PowerShell 5.1 can return a 3xx body without throwing when redirects
+        # are disabled. Inspect the real HTTP status instead of assuming success.
+        $response = Invoke-WebRequest -UseBasicParsing @params
+        $statusCode = [int]$response.StatusCode
+        if ($statusCode -lt 200 -or $statusCode -ge 300) {
+            return @{ Success = $false; Error = "HTTP $statusCode"; StatusCode = $statusCode; Data = $null }
+        }
+        $data = if ($response.Content) { $response.Content | ConvertFrom-Json } else { $null }
         return @{
             Success = $true
-            Data = $response
-            StatusCode = 200
+            Data = $data
+            StatusCode = $statusCode
         }
     }
     catch {
@@ -280,7 +287,11 @@ Write-Step 1 "Reading JAR metadata..."
 
 $JarFile = Get-Item $JarPath
 $JarSize = $JarFile.Length
-$JarSha256 = Get-Sha256Hash -FilePath $JarPath
+[string]$JarSha256 = Get-Sha256Hash -FilePath $JarPath
+if ($JarSha256 -notmatch '^[0-9a-f]{64}$') {
+    Write-Error-Message "Could not compute the JAR checksum"
+    exit 1
+}
 
 if (-not $PluginId) {
     $PluginId = Get-ManifestValue -JarPath $JarPath -Key "Plugin-Id"
@@ -444,7 +455,10 @@ Write-Step 5 "Uploading JAR file..."
 
 try {
     Assert-PublishingUrl $UploadUrl
-    $uploadResponse = Invoke-RestMethod -Method Put -Uri $UploadUrl -InFile $JarPath -ContentType "application/octet-stream" -MaximumRedirection 0 -ErrorAction Stop
+    $uploadResponse = Invoke-WebRequest -UseBasicParsing -Method Put -Uri $UploadUrl -InFile $JarPath -ContentType "application/octet-stream" -MaximumRedirection 0 -ErrorAction Stop
+    if ([int]$uploadResponse.StatusCode -lt 200 -or [int]$uploadResponse.StatusCode -ge 300) {
+        throw "Upload returned an unsuccessful HTTP status"
+    }
     Write-Success "  JAR uploaded successfully"
 }
 catch {
@@ -459,7 +473,7 @@ Write-Step 5 "Finalizing version..."
 
 $finalizeBody = @{
     versionId = $VersionId
-    sha256 = $JarSha256
+    sha256 = [string]$JarSha256
     jarSize = $JarSize
 }
 
