@@ -12,16 +12,36 @@ internal suspend fun repairAdviceOrNull(
     try {
         request().also {
             if (it == null) {
-                LoggerFactory.getLogger("RepairAdvice").warn("No repair advice for {}; recovering without it", processId)
+                LoggerFactory.getLogger("RepairAdvice").warn(
+                    "No repair advice for {}; recovering without it",
+                    processId,
+                )
             }
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (failure: Exception) {
-        LoggerFactory.getLogger("RepairAdvice").warn(
-            "Repair adviser unavailable for {} ({}); recovering without advice",
-            processId,
-            failure.javaClass.simpleName,
-        )
-        null
+    } catch (failure: io.grpc.StatusException) {
+        unavailableAdvice(processId, failure)
+    } catch (failure: io.grpc.StatusRuntimeException) {
+        unavailableAdvice(processId, failure)
+    } catch (failure: IllegalStateException) {
+        unavailableAdvice(processId, failure)
+    } catch (failure: java.io.IOException) {
+        unavailableAdvice(processId, failure)
+    } catch (failure: IllegalArgumentException) {
+        unavailableAdvice(processId, failure)
+    } catch (failure: SecurityException) {
+        unavailableAdvice(processId, failure)
     }
+
+private fun unavailableAdvice(
+    processId: String,
+    failure: Exception,
+): RepairAction? {
+    LoggerFactory.getLogger("RepairAdvice").warn(
+        "Repair adviser unavailable for {} ({}); recovering without advice",
+        processId,
+        failure.javaClass.simpleName,
+    )
+    return null
+}
