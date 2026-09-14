@@ -30,7 +30,9 @@ class NativeDirectoryTest {
             builder.environment()["NATIVE_TEST_TARGET"] = outside.toString()
             val process = builder.start()
             try {
-                assertTrue(process.waitFor(15, TimeUnit.SECONDS), "Junction creation timed out")
+                // PowerShell cold startup can exceed 15s on a busy full-build Windows runner.
+                // This is fixture setup, not the native operation under test.
+                assertTrue(process.waitFor(60, TimeUnit.SECONDS), "Junction fixture creation timed out")
                 assertEquals(0, process.exitValue(), process.errorStream.bufferedReader().readText())
             } finally {
                 process.destroyForcibly()
