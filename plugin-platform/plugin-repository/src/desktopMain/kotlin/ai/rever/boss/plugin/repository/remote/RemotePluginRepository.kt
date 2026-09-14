@@ -57,15 +57,29 @@ class RemotePluginRepository(
     ): T? =
         try {
             action()
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            logger.warn(
-                LogCategory.SYSTEM,
-                "Plugin cache unavailable; continuing without cache",
-                mapOf("operation" to operation, "failureType" to e.javaClass.simpleName),
-            )
-            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: java.io.IOException) {
+            cacheUnavailable(operation, failure)
+        } catch (failure: IllegalStateException) {
+            cacheUnavailable(operation, failure)
+        } catch (failure: SecurityException) {
+            cacheUnavailable(operation, failure)
+        } catch (failure: IllegalArgumentException) {
+            cacheUnavailable(operation, failure)
         }
+
+    private fun cacheUnavailable(
+        operation: String,
+        failure: Exception,
+    ): Nothing? {
+        logger.warn(
+            LogCategory.SYSTEM,
+            "Plugin cache unavailable; continuing without cache",
+            mapOf("operation" to operation, "failureType" to failure.javaClass.simpleName),
+        )
+        return null
+    }
 
     /**
      * Enforce the store's anchor signature for a JAR whose SHA-256 has
@@ -366,7 +380,9 @@ class RemotePluginRepository(
                         pluginId = pluginId,
                         versionLabel = downloadInfo.version,
                         requestedVersion = version,
-                        onVerificationFailure = { cacheOrNull("purge") { downloadCache.removeCachedJar(pluginId, downloadInfo.version) } },
+                        onVerificationFailure = {
+                            cacheOrNull("purge") { downloadCache.removeCachedJar(pluginId, downloadInfo.version) }
+                        },
                     )
                     cachedFile.copyTo(File(targetPath), overwrite = true)
                     PluginSignatureSidecar.persist(targetPath, downloadInfo.signature)
