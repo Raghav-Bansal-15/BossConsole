@@ -253,16 +253,6 @@ class OrchestratorServiceImpl(
 
     override fun watchHealth(request: Empty): Flow<HealthEvent> = _healthEvents.asSharedFlow()
 
-    private fun outcomeToStrategy(outcome: RepairOutcome): RepairStrategy =
-        when (outcome) {
-            is RepairOutcome.Restarted -> RepairStrategy.REPAIR_STRATEGY_RESTART
-            is RepairOutcome.StateReset -> RepairStrategy.REPAIR_STRATEGY_RESET_STATE
-            is RepairOutcome.ConfigPatched -> RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG
-            is RepairOutcome.CodeFixProposed -> RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE
-            is RepairOutcome.Escalated -> RepairStrategy.REPAIR_STRATEGY_ESCALATE
-            is RepairOutcome.Failed -> RepairStrategy.REPAIR_STRATEGY_ESCALATE
-        }
-
     private fun buildRepairAction(
         repairId: String,
         strategy: RepairStrategy,
@@ -387,3 +377,13 @@ private fun noApprovalSinkReason(
 ): String =
     "The approval was recorded but nothing applied it: this process has nothing wired to apply " +
         "a ${action.strategy} repair, so the proposal for process $processId is a proposal only"
+
+private fun outcomeToStrategy(outcome: RepairOutcome): RepairStrategy =
+    when (outcome) {
+        is RepairOutcome.Restarted -> RepairStrategy.REPAIR_STRATEGY_RESTART
+        is RepairOutcome.StateReset -> RepairStrategy.REPAIR_STRATEGY_RESET_STATE
+        is RepairOutcome.ConfigPatched -> RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG
+        is RepairOutcome.CodeFixProposed -> RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE
+        is RepairOutcome.Escalated -> RepairStrategy.REPAIR_STRATEGY_ESCALATE
+        is RepairOutcome.Failed -> RepairStrategy.REPAIR_STRATEGY_ESCALATE
+    }
