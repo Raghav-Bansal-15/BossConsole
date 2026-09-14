@@ -32,7 +32,10 @@ class MasteryExecutorLimitsTest {
                 }
             val events = executor.execute(mastery, emptyMap()).toList()
             assertEquals(2, calls)
-            assertEquals(listOf(true, false), events.filterIsInstance<MasteryProgress.NodeFailed>().map { it.willRetry })
+            assertEquals(
+                listOf(true, false),
+                events.filterIsInstance<MasteryProgress.NodeFailed>().map { it.willRetry },
+            )
             assertIs<MasteryProgress.Failed>(events.last())
         }
 

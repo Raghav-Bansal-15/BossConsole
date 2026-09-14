@@ -120,9 +120,7 @@ class MasteryExecutor(
             try {
                 return slots.withPermit {
                     // Queueing and retry backoff do not consume the invocation deadline or a permit.
-                    withTimeoutOrNull(node.timeoutMs) {
-                        capabilityResolver.invoke(node.pluginId, node.action, resolvedInput)
-                    } ?: throw NodeExecutionException(node.id, "Node timed out after ${node.timeoutMs} ms")
+                    invokeAttempt(node, resolvedInput)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -143,6 +141,14 @@ class MasteryExecutor(
 
         throw NodeExecutionException(node.id, lastError ?: "Max retries exceeded")
     }
+
+    private suspend fun invokeAttempt(
+        node: MasteryNode,
+        resolvedInput: Map<String, String>,
+    ): Map<String, String> =
+        withTimeoutOrNull(node.timeoutMs) {
+            capabilityResolver.invoke(node.pluginId, node.action, resolvedInput)
+        } ?: throw NodeExecutionException(node.id, "Node timed out after ${node.timeoutMs} ms")
 
     /** Bound map overhead and UTF-16 strings before buffering progress or retaining a node result. */
     private fun reserveOutput(
