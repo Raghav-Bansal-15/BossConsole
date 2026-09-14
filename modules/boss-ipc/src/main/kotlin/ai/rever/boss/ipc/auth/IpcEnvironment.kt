@@ -1,6 +1,13 @@
 package ai.rever.boss.ipc.auth
 
-/** Environment handoff owned by the spawning host. The child cannot choose these credentials. */
+/**
+ * Environment handoff owned by the spawning host. The child cannot choose these credentials.
+ *
+ * TLS pins the server; bearer credentials authorize the caller. This is not an OS sandbox:
+ * same-user processes may inspect the environment, and descendants inherit it unless scrubbed.
+ * Remove all handoff credentials before launching user commands. Windows loopback relies on
+ * these tokens rather than Unix socket permissions; do not describe this transport as mTLS.
+ */
 object IpcEnvironment {
     const val PROCESS_TOKEN = "BOSS_PROCESS_TOKEN"
     const val KERNEL_CERTIFICATE = "BOSS_KERNEL_TLS_CERT"

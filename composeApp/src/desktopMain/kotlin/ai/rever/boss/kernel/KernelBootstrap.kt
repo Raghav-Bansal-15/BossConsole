@@ -590,8 +590,7 @@ class KernelBootstrap(
     ): RepairAction? {
         // Never ask the orchestrator to diagnose its own death, and never wait on one that has
         // not registered an address yet.
-        val stub = if (failure.processId == ORCHESTRATOR_PROCESS_ID) null else orchestratorStub()
-        if (stub == null) return null
+        if (failure.processId == ORCHESTRATOR_PROCESS_ID) return null
 
         val report =
             ProcessFailureReport
@@ -606,23 +605,10 @@ class KernelBootstrap(
                 .apply { registry.getManifest(failure.processId)?.let { setManifest(it) } }
                 .build()
 
-        return try {
+        return repairAdviceOrNull(failure.processId) {
+            // Obtaining the channel is fallible too: dead handles remain in the registry.
+            val stub = orchestratorStub() ?: return@repairAdviceOrNull null
             withTimeoutOrNull(REPAIR_ADVICE_TIMEOUT_MS) { stub.reportFailure(report) }
-                ?: run {
-                    logger.warn(
-                        "Orchestrator did not answer within {}ms for {} - recovering without advice",
-                        REPAIR_ADVICE_TIMEOUT_MS,
-                        failure.processId,
-                    )
-                    null
-                }
-        } catch (e: Exception) {
-            logger.warn(
-                "Could not reach the orchestrator for {} ({}) - recovering without advice",
-                failure.processId,
-                e.message,
-            )
-            null
         }
     }
 
