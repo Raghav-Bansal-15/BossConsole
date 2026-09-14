@@ -91,7 +91,7 @@ jobs:
       - name: Verify the pre-2.33 glibc stat ABI
         shell: bash
         run: |
-          ldd --version | head -1
+          ldd --version
           ./gradlew :boss-native-files:test :boss-native-files:nativeSmokeJvm --console=plain --no-daemon
       - uses: actions/upload-artifact@v7
         if: always()
