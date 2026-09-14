@@ -74,6 +74,21 @@ class FileAuthorityTest {
         }
 
     @Test
+    fun `ordinary filenames containing two dots are not parent traversal`() =
+        runBlocking {
+            for (name in listOf("..hidden", "a..b")) {
+                val path = root.resolve(name)
+                service.createFile(CreateFileRequest.newBuilder().setPath(path.toString()).build())
+                assertTrue(Files.exists(path))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                val path = root.resolve("../escape").toString()
+                service.createFile(CreateFileRequest.newBuilder().setPath(path).build())
+            }
+            Unit
+        }
+
+    @Test
     fun `recursive deletion handles wide directories and refuses excessive depth`() =
         runBlocking {
             val wide = Files.createDirectory(root.resolve("wide"))

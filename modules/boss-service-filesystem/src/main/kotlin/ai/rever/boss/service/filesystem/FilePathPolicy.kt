@@ -18,8 +18,9 @@ internal class FilePathPolicy(
             }.distinct()
 
     fun validate(path: String) {
-        require(!path.contains("..")) { "Path traversal sequences ('..') are not allowed: $path" }
-        authorize(Path.of(path).toAbsolutePath().normalize())
+        val parsed = Path.of(path)
+        require(parsed.none { it.toString() == ".." }) { "Parent traversal components are not allowed: $path" }
+        authorize(parsed.toAbsolutePath().normalize())
     }
 
     fun allowed(path: Path): Boolean = blockedRoots.none(path::startsWith)
