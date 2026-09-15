@@ -373,6 +373,40 @@ else {
 
 Write-Host ""
 
+# minBossVersion drives the host-side update gate (PluginUpdateManager) and the
+# loader check — hardcoding it would let old hosts pull updates they can't load.
+$minBossVersion = "1.0.0"
+$pluginJson = $null
+$zip = $null
+$reader = $null
+try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
+    $pluginJsonEntry = $zip.Entries | Where-Object { $_.FullName -eq "META-INF/boss-plugin/plugin.json" }
+    if ($pluginJsonEntry) {
+        $stream = $pluginJsonEntry.Open()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $pluginJson = $reader.ReadToEnd() | ConvertFrom-Json
+        $reader.Close()
+        $stream.Close()
+        if ($pluginJson.minBossVersion) {
+            $minBossVersion = $pluginJson.minBossVersion
+        }
+    }
+}
+catch {
+    Write-Warning "Could not read minBossVersion from plugin.json, defaulting to 1.0.0"
+}
+
+finally {
+    if ($reader) { $reader.Dispose() }
+    if ($zip) { $zip.Dispose() }
+}
+
+if (-not $HomepageUrl -and $pluginJson.url) { $HomepageUrl = $pluginJson.url }
+if (-not $HomepageUrl -and $pluginJson.homepageUrl) { $HomepageUrl = $pluginJson.homepageUrl }
+if (-not $HomepageUrl) { $HomepageUrl = Get-ManifestValue -JarPath $JarPath -Key "Plugin-Url" }
+
 # Step 3: Create plugin entry if needed
 if (-not $PluginExists) {
     Write-Step 3 "Creating plugin entry..."
@@ -383,7 +417,7 @@ if (-not $PluginExists) {
     
     $tagsArray = @()
     if ($Tags) {
-        $tagsArray = $Tags -split "," | ForEach-Object { $_.Trim() }
+        $tagsArray = @($Tags -split "," | ForEach-Object { $_.Trim() })
     }
     
     $publishBody = @{
@@ -415,29 +449,6 @@ Write-Host ""
 
 # Step 4: Create version and get upload URL
 Write-Step 4 "Creating version entry..."
-
-# minBossVersion drives the host-side update gate (PluginUpdateManager) and the
-# loader check — hardcoding it would let old hosts pull updates they can't load.
-$minBossVersion = "1.0.0"
-try {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
-    $pluginJsonEntry = $zip.Entries | Where-Object { $_.FullName -eq "META-INF/boss-plugin/plugin.json" }
-    if ($pluginJsonEntry) {
-        $stream = $pluginJsonEntry.Open()
-        $reader = New-Object System.IO.StreamReader($stream)
-        $pluginJson = $reader.ReadToEnd() | ConvertFrom-Json
-        $reader.Close()
-        $stream.Close()
-        if ($pluginJson.minBossVersion) {
-            $minBossVersion = $pluginJson.minBossVersion
-        }
-    }
-    $zip.Dispose()
-}
-catch {
-    Write-Warning "Could not read minBossVersion from plugin.json, defaulting to 1.0.0"
-}
 
 $versionBody = @{
     version = $Version

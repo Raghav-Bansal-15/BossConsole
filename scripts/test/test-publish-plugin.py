@@ -28,6 +28,7 @@ class PublisherTest(unittest.TestCase):
         self.requests = []
         self.status = 404
         self.redirect = False
+        self.redirect_upload = False
         self.observed_args = ""
         owner = self
 
@@ -53,10 +54,10 @@ class PublisherTest(unittest.TestCase):
                     }
                 else:
                     status, value = 200, {}
-                if owner.redirect:
+                if owner.redirect or (owner.redirect_upload and self.command == "PUT"):
                     status = 307
                 self.send_response(status)
-                if owner.redirect:
+                if owner.redirect or (owner.redirect_upload and self.command == "PUT"):
                     self.send_header("Location", owner.base + "/must-not-follow")
                 self.end_headers()
                 self.wfile.write(json.dumps(value).encode())
@@ -76,21 +77,21 @@ class PublisherTest(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def run_publisher(self, *extra, author=SPECIAL):
+    def run_publisher(self, *extra, author=SPECIAL, tags='alpha,"quoted",雪', homepage="https://example.invalid/plugin"):
         command = [
             str(PUBLISHER), str(self.jar), "--url", self.base,
             "--plugin-id", "plugin/a?b#c %雪", "--display-name", SPECIAL,
             "--description", SPECIAL, "--changelog", SPECIAL,
-            "--author", author, "--tags", 'alpha,"quoted",雪',
-            "--homepage-url", "https://example.invalid/plugin", *extra,
+            "--author", author, "--tags", tags,
+            "--homepage-url", homepage, *extra,
         ]
         if isinstance(self, PowerShellPublisherTest):
             command = [os.environ["BOSS_TEST_PWSH"], "-NoLogo", "-NoProfile", "-File",
                        str(PUBLISHER.with_suffix(".ps1")), "-JarPath", str(self.jar),
                        "-StoreUrl", self.base, "-PluginId", "plugin/a?b#c %雪",
                        "-DisplayName", SPECIAL, "-Description", SPECIAL, "-Changelog", SPECIAL,
-                       "-Author", author, "-Tags", 'alpha,"quoted",雪',
-                       "-HomepageUrl", "https://example.invalid/plugin", *extra]
+                       "-Author", author, "-Tags", tags,
+                       "-HomepageUrl", homepage, *extra]
         result = subprocess.run(command, env={**os.environ, "BOSS_PLUGIN_STORE_TOKEN": TOKEN},
             cwd=self.temporary.name, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         self.assertNotIn(TOKEN, result.stdout + result.stderr)
@@ -134,6 +135,28 @@ class PublisherTest(unittest.TestCase):
         result = self.run_publisher()
         self.assertNotEqual(0, result.returncode)
         self.assertEqual(1, len(self.requests))
+
+    def test_single_and_empty_tags_are_arrays(self):
+        for tags, expected in [("devtools", ["devtools"]), ("", [])]:
+            self.requests.clear()
+            result = self.run_publisher(tags=tags)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(expected, json.loads(self.requests[1][3])["tags"])
+
+    def test_homepage_is_read_from_plugin_metadata(self):
+        with zipfile.ZipFile(self.jar, "w") as archive:
+            archive.writestr("META-INF/MANIFEST.MF", "Plugin-Id: original\nPlugin-Version: 1.2.3\n")
+            archive.writestr("META-INF/boss-plugin/plugin.json", json.dumps({"url": "https://example.invalid/from-jar"}))
+        result = self.run_publisher(homepage="")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("https://example.invalid/from-jar", json.loads(self.requests[1][3])["homepageUrl"])
+
+    def test_signed_upload_redirect_is_not_followed(self):
+        self.redirect_upload = True
+        result = self.run_publisher()
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(["GET", "POST", "POST", "PUT"], [r[0] for r in self.requests])
+        self.assertNotIn("Authorization", self.requests[-1][2])
 
     def test_rejects_legacy_token_arguments(self):
         result = self.run_publisher("--token", TOKEN)
