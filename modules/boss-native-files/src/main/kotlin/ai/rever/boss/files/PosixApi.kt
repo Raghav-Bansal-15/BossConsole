@@ -1,5 +1,6 @@
 package ai.rever.boss.files
 
+import com.sun.jna.Function
 import com.sun.jna.Library
 import com.sun.jna.Memory
 import com.sun.jna.Native
@@ -9,6 +10,7 @@ import java.io.IOException
 import java.nio.file.AccessDeniedException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.NoSuchFileException
+import java.util.concurrent.ConcurrentHashMap
 
 internal object PosixApi {
     val mac = Platform.isMac()
@@ -55,22 +57,31 @@ internal object PosixApi {
         return result
     }
 
+    private val statFunctions = ConcurrentHashMap<String, Function>()
+
     private fun stat(
         name: String,
         legacy: String,
         arguments: Array<Any>,
     ): Int {
         val function =
-            try {
-                library.getFunction(name)
-            } catch (missing: UnsatisfiedLinkError) {
-                // glibc before 2.33 exports the versioned x86-64 ABI instead. Version 1 uses
-                // the same 64-bit stat layout decoded below; never guess another architecture.
-                if (mac || Platform.ARCH != "x86-64") throw missing
-                val versioned = Array<Any>(arguments.size + 1) { if (it == 0) 1 else arguments[it - 1] }
-                return library.getFunction(legacy).invokeInt(versioned)
+            statFunctions.getOrPut(name) {
+                try {
+                    library.getFunction(name)
+                } catch (missing: UnsatisfiedLinkError) {
+                    if (mac || Platform.ARCH !in setOf("x86-64", "aarch64")) throw missing
+                    library.getFunction(legacy)
+                }
             }
-        return function.invokeInt(arguments)
+        val nativeArguments =
+            if (function.name == legacy) {
+                // glibc's versioned ABI: x86-64 uses version 1; Linux aarch64 uses version 0.
+                val version = if (Platform.ARCH == "x86-64") 1 else 0
+                Array<Any>(arguments.size + 1) { if (it == 0) version else arguments[it - 1] }
+            } else {
+                arguments
+            }
+        return function.invokeInt(nativeArguments)
     }
 
     fun info(

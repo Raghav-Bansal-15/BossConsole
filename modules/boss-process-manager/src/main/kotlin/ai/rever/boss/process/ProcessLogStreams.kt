@@ -13,7 +13,10 @@ internal class ProcessLogStreams private constructor(
     private val stderr: Lease,
 ) : AutoCloseable {
     fun attach(process: Process): CompletableFuture<Void> =
-        CompletableFuture.allOf(startDrain(process.inputStream, stdout), startDrain(process.errorStream, stderr))
+        CompletableFuture.allOf(
+            startDrain(ProcessOwnedLogInput(process.inputStream, process), stdout),
+            startDrain(ProcessOwnedLogInput(process.errorStream, process), stderr),
+        )
 
     private fun startDrain(
         input: InputStream,
@@ -94,6 +97,9 @@ internal class ProcessLogStreams private constructor(
     companion object {
         private val logger = LoggerFactory.getLogger(ProcessLogStreams::class.java)
         private val writers = mutableMapOf<String, Shared>()
+
+        internal val activeWriterCount: Int
+            get() = synchronized(writers) { writers.size }
 
         fun acquire(
             root: Path,

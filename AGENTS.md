@@ -2077,3 +2077,17 @@ no second sandbox prompt. Explicit policies and session trust retain precedence.
 HIGH/CRITICAL names use the mutating default, while unknown names remain allowed
 by default. Risk reasons and sanitized arguments appear together in the existing
 approval dialog. #362 is closed pending extraction into a management plugin.
+
+## Process log authority and lifetime
+
+Process logs are host-owned infrastructure, not an OS sandbox. Log setup fails closed
+before spawning when the log root crosses an unapproved symlink, the filesystem cannot
+provide persistent Windows ACLs, or the native platform is unsupported. No child is
+started with unprotected fallback logs. Operators must use a supported private local
+log directory; setup failures must not expose credential-bearing environment values.
+
+Each process id shares one rotating writer across overlapping generations. Drain
+lifetimes follow the owned parent, not descendant EOF. After parent exit, each pipe
+drains only its observed remaining snapshot (at most 1 MiB); later descendant output
+is outside this log contract. Recording failure does not stop draining a live parent's
+output. Retention is bounded per process id, not across all distinct process ids.
