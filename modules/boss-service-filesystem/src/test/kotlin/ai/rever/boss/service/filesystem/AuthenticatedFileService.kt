@@ -9,6 +9,7 @@ import ai.rever.boss.ipc.auth.ProcessTokenRegistry
 import ai.rever.boss.ipc.proto.services.FileSystemServiceGrpcKt
 import io.grpc.BindableService
 import io.grpc.ManagedChannel
+import java.util.concurrent.TimeUnit
 
 /**
  * Stands the production authenticated transport up in front of [FileSystemServiceImpl], with
@@ -30,7 +31,10 @@ class AuthenticatedFileService(
         server.start()
     }
 
-    /** A caller with the process authority a plugin child would hold - authenticated, not host. */
+    /**
+     * An authenticated caller with the requested authority (PROCESS by default).
+     * Reusing a processId revokes the credential previously issued for that id.
+     */
     fun channelFor(
         processId: String,
         authority: ProcessAuthority = ProcessAuthority.PROCESS,
@@ -44,6 +48,7 @@ class AuthenticatedFileService(
 
     override fun close() {
         channels.forEach { it.shutdownNow() }
+        channels.forEach { it.awaitTermination(5, TimeUnit.SECONDS) }
         server.stop(2_000)
     }
 
