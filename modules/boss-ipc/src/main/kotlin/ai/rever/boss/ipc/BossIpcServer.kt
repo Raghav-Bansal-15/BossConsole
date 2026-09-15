@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit
  */
 class BossIpcServer(
     private val address: String,
+    // Every production endpoint requires both verified process identity and pinned TLS.
     private val tokenRegistry: ProcessTokenRegistry,
     private val tlsIdentity: IpcTlsIdentity,
 ) {
