@@ -15,7 +15,8 @@ import java.io.File
  * - BOSS_PROCESS_ID: Assigned process ID
  * - BOSS_PROCESS_TYPE: Process type (SERVICE, APP, PLUGIN)
  *
- * Process stdout/stderr are redirected to log files under $BOSS_DATA_DIR/logs/{processId}/
+ * Process stdout/stderr are drained into bounded logs under $BOSS_DATA_DIR/logs/{processId}/.
+ * Each stream retains at most five 10 MiB files, including the current file.
  *
  * Everything spawned here is entered into [registry], because the registry is what the kernel's
  * shutdown hook reaps on exit. Registration used to be each caller's job, and the caller that
@@ -50,10 +51,8 @@ class ProcessSpawner
          * deliberate termination and a crash.
          */
         fun spawn(config: ProcessConfig): ManagedProcess {
-            val processLogDir = File(logDir, config.processId).also { it.mkdirs() }
-            val stdoutLog = File(processLogDir, "stdout.log")
-            val stderrLog = File(processLogDir, "stderr.log")
-
+            // Validate before socket or log creation, not after a caller-selected directory is made.
+            IpcAddressResolver.validateProcessIdentifier(config.processId)
             val ipcAddress =
                 IpcAddressResolver.resolveAddress(
                     config.processType.name.lowercase(),
@@ -63,17 +62,14 @@ class ProcessSpawner
             val command = buildCommand(config)
 
             logger.info(
-                "Spawning process: id={}, type={}, command={}",
+                "Spawning process: id={}, type={}",
                 config.processId,
                 config.processType,
-                command.joinToString(" "),
             )
 
             val processBuilder =
                 ProcessBuilder(command)
                     .directory(config.workDir)
-                    .redirectOutput(ProcessBuilder.Redirect.appendTo(stdoutLog))
-                    .redirectError(ProcessBuilder.Redirect.appendTo(stderrLog))
 
             // Set environment variables
             processBuilder.environment().apply {
@@ -87,14 +83,19 @@ class ProcessSpawner
                 // credential — only the kernel gets to say what a process's own token is. Never logged.
             }
 
+            val logs = ProcessLogStreams.acquire(logDir.toPath(), config.processId)
             var security: SpawnIpcSecurity? = null
             val process =
                 runCatching {
                     security = SpawnIpcSecurity.create(tokenRegistry, kernelIdentity, config, ipcAddress)
                     security?.install(processBuilder.environment())
-                    processBuilder.start()
+                    startWithLogs(processBuilder, logs)
                 }.onFailure {
-                    security?.revoke()
+                    try {
+                        logs.close()
+                    } finally {
+                        security?.revoke()
+                    }
                 }.getOrThrow()
             process.onExit().thenRun { security?.revoke() }
 
@@ -112,6 +113,24 @@ class ProcessSpawner
             ).also {
                 it.ipcClient = security?.client
                 registry?.register(config.processId, it)
+            }
+        }
+
+        private fun startWithLogs(
+            builder: ProcessBuilder,
+            logs: ProcessLogStreams,
+        ): Process {
+            val child = builder.start()
+            var attached = false
+            try {
+                logs.attach(child)
+                attached = true
+                return child
+            } finally {
+                if (!attached) {
+                    child.destroyForcibly()
+                    child.onExit().join()
+                }
             }
         }
 

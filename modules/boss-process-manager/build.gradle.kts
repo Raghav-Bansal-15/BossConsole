@@ -16,6 +16,7 @@ java {
 dependencies {
     // IPC protocol definitions and connection management
     api(project(":boss-ipc"))
+    implementation(project(":boss-native-files"))
 
     // Kotlin coroutines
     api(libs.kotlinx.coroutines.core)
