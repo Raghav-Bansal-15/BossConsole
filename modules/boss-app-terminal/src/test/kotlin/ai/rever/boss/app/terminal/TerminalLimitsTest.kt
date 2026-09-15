@@ -74,6 +74,17 @@ class TerminalLimitsTest {
         }
 
     @Test
+    fun `empty command arguments reach the child unchanged`() =
+        runBlocking {
+            withTimeout(10_000) {
+                val response = stub.createSession(request("argument").toBuilder().addCommand("").build())
+                val output = stub.streamOutput(stream(response.sessionId)).toList()
+                assertTrue(output.any { it.data.toStringUtf8().contains("argument-length=0") })
+                assertTrue(output.last().isExit)
+            }
+        }
+
+    @Test
     fun `invalid environment produces INVALID_ARGUMENT and returns admission`() =
         runBlocking {
             val invalid =

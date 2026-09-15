@@ -21,6 +21,7 @@ public final class TerminalTestProcess {
                 Thread.sleep(30000);
             }
             case "echo" -> System.out.print("hello caf\u00e9 \u4e16\u754c");
+            case "argument" -> System.out.print("argument-length=" + args[2].length());
             case "input" -> {
                 System.out.println("ready");
                 System.out.flush();
