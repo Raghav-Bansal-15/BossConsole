@@ -260,20 +260,31 @@ class TerminalLimitsTest {
     fun `an exited shell releases capacity while a descendant still holds stdout`() =
         runBlocking {
             try {
-                withTimeout(5_000) {
-                    val id = start("background")
-                    awaitExit(id)
-                    val descendant =
-                        ProcessHandle.of(Files.readString(root.resolve("descendant.pid")).toLong()).orElseThrow()
-                    assertTrue(descendant.isAlive)
-                    assertTrue(
-                        stub
-                            .streamOutput(stream(id))
-                            .toList()
-                            .last()
-                            .isExit,
-                    )
-                    val replacement = start("echo")
+                // JVM fixture startup is not the lifecycle deadline, especially on a busy Windows runner.
+                val id =
+                    withTimeout(30_000) {
+                        val launched = start("background")
+                        while (!Files.exists(root.resolve("descendant.pid"))) delay(10)
+                        launched
+                    }
+                val replacement =
+                    withTimeout(5_000) {
+                        awaitExit(id)
+                        val descendant =
+                            ProcessHandle.of(Files.readString(root.resolve("descendant.pid")).toLong()).orElseThrow()
+                        assertTrue(descendant.isAlive)
+                        assertTrue(
+                            stub
+                                .streamOutput(stream(id))
+                                .toList()
+                                .last()
+                                .isExit,
+                        )
+                        // Admission must be reusable inside the same five-second lifecycle bound.
+                        start("echo")
+                    }
+                // The replacement's cold JVM execution has its own deadline, not the parent's cleanup budget.
+                withTimeout(10_000) {
                     assertTrue(
                         stub
                             .streamOutput(stream(replacement))
