@@ -74,6 +74,20 @@ class TerminalLimitsTest {
         }
 
     @Test
+    fun `invalid environment produces INVALID_ARGUMENT and returns admission`() =
+        runBlocking {
+            val bad =
+                CreateSessionRequest
+                    .newBuilder()
+                    .addCommand("unused")
+                    .putEnvironment("bad=name", "value")
+                    .build()
+            val failure = assertFailsWith<StatusException> { stub.createSession(bad) }
+            assertEquals(Status.Code.INVALID_ARGUMENT, failure.status.code)
+            assertTrue(start("echo").isNotBlank())
+        }
+
+    @Test
     fun `late subscription replays output and completes with the exit notification`() =
         runBlocking {
             withTimeout(10_000) {

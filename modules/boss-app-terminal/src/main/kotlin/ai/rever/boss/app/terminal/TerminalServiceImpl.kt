@@ -66,6 +66,10 @@ class TerminalServiceImpl(
             // here until that dispatch succeeds, so a discarded response also terminates its process.
             delivered = true
             return response
+        } catch (_: IllegalArgumentException) {
+            throw Status.INVALID_ARGUMENT
+                .withDescription("Invalid terminal command or environment")
+                .asRuntimeException()
         } catch (failure: IOException) {
             logger.warn("Terminal launch failed: {}", failure.javaClass.simpleName)
             return CreateSessionResponse
@@ -108,7 +112,16 @@ class TerminalServiceImpl(
                 sessions.values.filter { it.active }
             }
         active.forEach { it.terminate() }
-        active.forEach { it.process.onExit().join() }
+        val deadline =
+            System.nanoTime() +
+                java.util.concurrent.TimeUnit.SECONDS
+                    .toNanos(5)
+        active.forEach {
+            val remaining = (deadline - System.nanoTime()).coerceAtLeast(0)
+            if (!it.process.waitFor(remaining, java.util.concurrent.TimeUnit.NANOSECONDS)) {
+                logger.warn("Terminal process has not exited after shutdown deadline")
+            }
+        }
     }
 
     override suspend fun sendInput(request: SendInputRequest): Empty =

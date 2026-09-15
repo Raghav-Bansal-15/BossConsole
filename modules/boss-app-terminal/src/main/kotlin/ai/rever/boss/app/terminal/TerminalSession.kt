@@ -50,7 +50,9 @@ internal class TerminalSession(
                     }
                 }
             } catch (_: IOException) {
-                process.destroyForcibly()
+                // Windows reports an already closed output pipe as an IOException from available().
+                // Pipe closure is not permission to kill a still-running process; retain its slot until exit.
+                output.append(chunk("\r\n[Terminal output pipe closed]\r\n"))
             } finally {
                 // Capacity includes the pump and process lifetime, including cancellation cleanup.
                 try {
@@ -78,10 +80,18 @@ internal class TerminalSession(
             if (!active || !process.isAlive) {
                 throw Status.FAILED_PRECONDITION.withDescription("Terminal has exited").asRuntimeException()
             }
-            process.outputStream.write(bytes)
-            process.outputStream.flush()
+            writeInput(bytes)
         } finally {
             inputLock.unlock()
+        }
+    }
+
+    private fun writeInput(bytes: ByteArray) {
+        try {
+            process.outputStream.write(bytes)
+            process.outputStream.flush()
+        } catch (_: IOException) {
+            throw Status.FAILED_PRECONDITION.withDescription("Terminal input pipe is closed").asRuntimeException()
         }
     }
 
