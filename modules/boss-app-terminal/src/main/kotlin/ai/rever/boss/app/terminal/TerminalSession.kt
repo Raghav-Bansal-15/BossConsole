@@ -26,8 +26,9 @@ internal class TerminalSession(
 
     fun startPump(onStopped: () -> Unit) {
         Thread({
+            val input = process.inputStream
             try {
-                process.inputStream.use { input ->
+                run {
                     val buffer = ByteArray(4096)
                     // Never block on EOF: a reparented descendant may still own the pipe's write end.
                     // Only this thread reads, so reading at most available bytes cannot wait for more.
@@ -57,6 +58,12 @@ internal class TerminalSession(
                 // Capacity includes the pump and process lifetime, including cancellation cleanup.
                 try {
                     val code = process.onExit().join().exitValue()
+                    // Keep the read end open until exit: closing on a read fault can SIGPIPE a live child.
+                    try {
+                        input.close()
+                    } catch (_: IOException) {
+                        // The pipe may already be broken; process exit still releases admission.
+                    }
                     output.append(
                         chunk("\r\n[Process exited with code $code]\r\n")
                             .toBuilder()

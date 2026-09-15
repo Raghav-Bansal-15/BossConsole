@@ -23,10 +23,12 @@ class TerminalPipeFailureTest {
         assertTrue(process.readAttempt.await(5, TimeUnit.SECONDS))
         assertFailsWith<TimeoutException> { stopped.get(100, TimeUnit.MILLISECONDS) }
         assertFalse(process.killed)
+        assertFalse(process.inputClosed)
         assertTrue(session.active)
         process.exit.complete(process)
         stopped.get(5, TimeUnit.SECONDS)
         assertFalse(session.active)
+        assertTrue(process.inputClosed)
     }
 
     private class BrokenPipeProcess : Process() {
@@ -34,6 +36,8 @@ class TerminalPipeFailureTest {
         val exit = CompletableFuture<Process>()
 
         @Volatile var killed = false
+
+        @Volatile var inputClosed = false
         private val input =
             object : InputStream() {
                 override fun available(): Int {
@@ -42,6 +46,10 @@ class TerminalPipeFailureTest {
                 }
 
                 override fun read(): Int = -1
+
+                override fun close() {
+                    inputClosed = true
+                }
             }
 
         override fun getInputStream() = input
