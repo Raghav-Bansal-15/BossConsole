@@ -47,6 +47,10 @@ class RemotePluginRepository(
             PluginStoreClient.getDownloadUrl(pluginId)
         }
     },
+    private val copyCachedJar: (File, File) -> Unit = { source, target ->
+        source.copyTo(target, overwrite = true)
+        Unit
+    },
 ) : PluginRepository {
     private val logger = BossLogger.forComponent("RemotePluginRepository")
 
@@ -385,12 +389,17 @@ class RemotePluginRepository(
                             cacheOrNull("purge") { downloadCache.removeCachedJar(pluginId, downloadInfo.version) }
                         },
                     )
-                    cachedFile.copyTo(File(targetPath), overwrite = true)
-                    PluginSignatureSidecar.persist(targetPath, downloadInfo.signature)
-                    // Nothing was fetched, but the caller's progress row exists and
-                    // would otherwise sit at 0% until the next phase moved it.
-                    onProgress?.invoke(1f)
-                    return@runCatching targetPath
+                    val copied =
+                        cacheOrNull("copy") {
+                            copyCachedJar(cachedFile, File(targetPath))
+                            true
+                        } == true
+                    if (copied) {
+                        PluginSignatureSidecar.persist(targetPath, downloadInfo.signature)
+                        // Nothing was fetched, but the caller still needs completed progress.
+                        onProgress?.invoke(1f)
+                        return@runCatching targetPath
+                    }
                 }
 
                 // Initialize progress tracking

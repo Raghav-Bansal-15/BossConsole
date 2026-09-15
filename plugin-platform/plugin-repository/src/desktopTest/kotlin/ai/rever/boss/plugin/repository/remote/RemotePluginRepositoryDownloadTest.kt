@@ -120,6 +120,30 @@ class RemotePluginRepositoryDownloadTest {
     private fun target(name: String) = File(tempDir, name).absolutePath
 
     @Test
+    fun `cache removed after lookup falls back to a verified download`() =
+        runBlocking<Unit> {
+            val source = File(tempDir, "source.jar").apply { writeBytes(jarBytes) }
+            cache.cacheJar(pluginId, "1.0.0", source)
+            val signature = signAnchor("1.0.0")
+            var copies = 0
+            val repository =
+                RemotePluginRepository(
+                    downloadCache = cache,
+                    storeVerifier = verifier,
+                    downloadInfoProvider = { _, _ -> downloadInfo("1.0.0", signature) },
+                    copyCachedJar = { cached, destination ->
+                        copies++
+                        Files.delete(cached.toPath())
+                        cached.copyTo(destination, overwrite = true)
+                    },
+                )
+            val installed = repository.downloadPlugin(pluginId, "1.0.0", target("lost-cache.jar")).getOrThrow()
+            assertEquals(1, copies)
+            assertTrue(File(installed).readBytes().contentEquals(jarBytes))
+            assertEquals(signature, PluginSignatureSidecar.read(installed))
+        }
+
+    @Test
     fun `fresh download with valid signature succeeds, caches, and writes the sidecar`() =
         runBlocking<Unit> {
             val sig = signAnchor("1.0.0")
