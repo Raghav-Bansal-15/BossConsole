@@ -24,6 +24,7 @@ import ai.rever.boss.logging.GlobalLogCapture
 import ai.rever.boss.performance.MemoryPressureWatchdog
 import ai.rever.boss.performance.PerformanceMonitor
 import ai.rever.boss.plugin.PluginStoreSetup
+import ai.rever.boss.plugin.launchpad.DevPluginReloader
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashInterceptor
 import ai.rever.boss.plugin.sandbox.ui.PluginCrashRegistry
@@ -74,6 +75,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.awt.Window
 import javax.swing.JPopupMenu
 import kotlin.system.exitProcess
@@ -227,6 +229,9 @@ fun main(args: Array<String>) {
     ChromiumFlagsSettingsManager.applyToSystemProperties()
     ai.rever.boss.config.SwipeNavSettingsManager
         .publish()
+    // Start release detection before the browser plugin's home surface can receive gestures.
+    ai.rever.boss.plugin.browser.MacOSScrollGesturePhases
+        .ensureStarted()
     ai.rever.boss.config.AutoPipSettingsManager
         .publish()
 
@@ -356,7 +361,18 @@ fun main(args: Array<String>) {
     ai.rever.boss.components.plugin.DefaultPlugin.Companion.loadPersistedPluginsInternal = { manager ->
         PluginStoreSetup.loadPersistedPlugins(manager)
     }
+    val defaultCheck = ai.rever.boss.components.plugin.DefaultPlugin.Companion.isAuthoritativeSystemPlugin
+    ai.rever.boss.components.plugin.DefaultPlugin.Companion.isAuthoritativeSystemPlugin = { pluginId ->
+        defaultCheck(pluginId) || PluginStoreSetup.isSystemPluginId(pluginId)
+    }
 
+    // Set up single-instance development reload handler
+    SingleInstanceManager.pluginReloadHandlerOverride = { pluginId ->
+        runBlocking {
+            DevPluginReloader.reload(pluginId).getOrThrow()
+            true
+        }
+    }
     GlobalLogCapture.start()
     ResourceModeConfig.publishToPlugins()
 
