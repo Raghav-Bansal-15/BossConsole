@@ -104,6 +104,11 @@ internal class WindowsOpen private constructor(
                 0,
             )
         val status = WindowsApi.nt.getFunction("NtCreateFile").invokeInt(arguments)
+        // FILE_CREATE + FILE_NON_DIRECTORY_FILE can report STATUS_FILE_IS_A_DIRECTORY
+        // before NAME_COLLISION. Preserve exclusive-create semantics without a racy path precheck.
+        if (disposition == 2 && status == 0xC00000BA.toInt()) {
+            throw FileAlreadyExistsException("Open relative file")
+        }
         WindowsApi.checkStatus(status, "Open relative file")
         return checkNotNull(memory.getPointer(80))
     }
