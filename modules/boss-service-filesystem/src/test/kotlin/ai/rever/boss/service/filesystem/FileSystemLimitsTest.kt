@@ -58,6 +58,15 @@ class FileSystemLimitsTest {
     }
 
     @Test
+    fun `native POSIX open refuses a replaced leaf link`() {
+        if (Platform.isWindows()) return
+        val target = Files.writeString(root.resolve("native-target"), "content")
+        openRegularFile(target).use { assertEquals(7L, it.size) }
+        val link = Files.createSymbolicLink(root.resolve("native-link"), target)
+        assertFailsWith<IOException> { openRegularFile(link).use { } }
+    }
+
+    @Test
     fun `native open rejects a FIFO without waiting for a writer`() {
         if (Platform.isWindows()) return
         val fifo = root.resolve("fifo")
