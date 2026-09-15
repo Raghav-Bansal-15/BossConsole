@@ -37,8 +37,19 @@ internal object WindowsPermissions {
         require(count == 1 && descriptor.getByte(dacl + 8) == 0.toByte()) { "Expected one owner permission entry" }
         require(descriptor.getByte(dacl + 9) == 0.toByte()) { "Private permissions cannot be inherited" }
         require(descriptor.getInt(dacl + 12) == 0x1f01ff) { "Owner must retain full file access" }
-        require(sidString(descriptor.share(owner)) == expectedOwner) { "Unexpected file owner" }
-        require(sidString(descriptor.share(dacl + 16)) == expectedOwner) { "Unexpected file access grant" }
+        require(sidString(boundedSid(descriptor, owner)) == expectedOwner) { "Unexpected file owner" }
+        require(sidString(boundedSid(descriptor, dacl + 16)) == expectedOwner) { "Unexpected file access grant" }
+    }
+
+    internal fun boundedSid(
+        descriptor: Memory,
+        offset: Long,
+    ): Pointer {
+        require(offset in 20..descriptor.size() - 8) { "Invalid SID offset" }
+        val count = descriptor.getByte(offset + 1).toInt() and 0xff
+        require(descriptor.getByte(offset) == 1.toByte() && count <= 15) { "Invalid SID header" }
+        require(8L + count * 4L <= descriptor.size() - offset) { "Truncated SID" }
+        return descriptor.share(offset)
     }
 
     fun sidString(sid: Pointer): String =
