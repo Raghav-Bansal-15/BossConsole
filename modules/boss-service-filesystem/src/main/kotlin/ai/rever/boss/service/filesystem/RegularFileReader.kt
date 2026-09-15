@@ -70,8 +70,9 @@ private class PosixRegularFile(
 
     init {
         // O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC. Values from Darwin fcntl.h
-        // and Linux asm-generic/fcntl.h (only the supported 64-bit ABIs above).
-        val flags = if (Platform.isMac()) 0x0004 or 0x0100 or 0x01000000 else 0x0800 or 0x20000 or 0x80000
+        // and Linux asm-generic/fcntl.h / arch/arm64/include/uapi/asm/fcntl.h.
+        val noFollow = if (Platform.ARCH == "aarch64") 0x8000 else 0x20000
+        val flags = if (Platform.isMac()) 0x0004 or 0x0100 or 0x01000000 else 0x0800 or noFollow or 0x80000
         descriptor = libc.getFunction("open").invokeInt(arrayOf<Any>(path.toString(), flags))
         if (descriptor < 0) throw nativeReadError("Open")
         var initialized = false
