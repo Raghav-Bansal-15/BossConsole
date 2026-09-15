@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import org.slf4j.LoggerFactory
 
 /** A dead adviser must not terminate the collector responsible for later process failures. */
+@Suppress("TooGenericExceptionCaught") // Advice is optional; all non-cancellation transport failures fall back.
 internal suspend fun repairAdviceOrNull(
     processId: String,
     request: suspend () -> RepairAction?,
@@ -20,17 +21,7 @@ internal suspend fun repairAdviceOrNull(
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (failure: io.grpc.StatusException) {
-        unavailableAdvice(processId, failure)
-    } catch (failure: io.grpc.StatusRuntimeException) {
-        unavailableAdvice(processId, failure)
-    } catch (failure: IllegalStateException) {
-        unavailableAdvice(processId, failure)
-    } catch (failure: java.io.IOException) {
-        unavailableAdvice(processId, failure)
-    } catch (failure: IllegalArgumentException) {
-        unavailableAdvice(processId, failure)
-    } catch (failure: SecurityException) {
+    } catch (failure: Exception) {
         unavailableAdvice(processId, failure)
     }
 

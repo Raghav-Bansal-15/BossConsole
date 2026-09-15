@@ -584,7 +584,7 @@ class KernelBootstrap(
     /**
      * Ask the orchestrator how to repair [failure], or null when it cannot be asked in time.
      */
-    private suspend fun requestRepairAdvice(
+    internal suspend fun requestRepairAdvice(
         registry: ProcessRegistry,
         failure: ProcessFailure,
     ): RepairAction? {
@@ -607,14 +607,14 @@ class KernelBootstrap(
 
         return repairAdviceOrNull(failure.processId) {
             // Obtaining the channel is fallible too: dead handles remain in the registry.
-            val stub = orchestratorStub() ?: return@repairAdviceOrNull null
+            val stub = adviserStub(registry) ?: return@repairAdviceOrNull null
             withTimeoutOrNull(REPAIR_ADVICE_TIMEOUT_MS) { stub.reportFailure(report) }
         }
     }
 
     /** A stub for the running orchestrator, or null while it has no registered address. */
-    private fun orchestratorStub(): OrchestratorServiceGrpcKt.OrchestratorServiceCoroutineStub? {
-        val client = processRegistry?.getProcess(ORCHESTRATOR_PROCESS_ID)?.ipcClient ?: return null
+    private fun adviserStub(registry: ProcessRegistry): OrchestratorServiceGrpcKt.OrchestratorServiceCoroutineStub? {
+        val client = registry.getProcess(ORCHESTRATOR_PROCESS_ID)?.ipcClient ?: return null
         return OrchestratorServiceGrpcKt.OrchestratorServiceCoroutineStub(client.channel)
     }
 

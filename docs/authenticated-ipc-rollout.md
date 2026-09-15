@@ -25,3 +25,12 @@ value for an absent key and a permission error for an existing foreign key; key 
 is therefore not confidential. Watching an absent key waits, and fails permission checks
 if a foreign instance subsequently creates it. Applications requiring confidential key
 existence need a separately specified state-addressing contract before relying on this API.
+
+The published IPC artifact is `boss-ipc-1.1.0.jar`, and the paired runtime declares
+`minIpcVersion: 1.1.0`. This distinguishes the credential-required JVM API from the
+old `boss-ipc-1.0.0.jar` and lets version-aware old hosts refuse the new runtime.
+The transport marker is still required; a numeric version is not a TLS capability check.
+`connectToService` no longer opens unauthenticated peer connections: absent services
+return null, and known services without a delegated credential fail explicitly.
+The IPC jar also stops forcing all gRPC classes to initialize at native-image build time;
+validate the paired runtime native image with its platform-dependent channel factories.
