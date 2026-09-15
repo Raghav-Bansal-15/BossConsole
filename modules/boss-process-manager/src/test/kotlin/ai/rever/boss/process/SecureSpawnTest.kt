@@ -19,6 +19,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 class SecureSpawnTest {
     @Test
@@ -50,10 +51,12 @@ class SecureSpawnTest {
                         ),
                     )
                 val client = assertNotNull(child.ipcClient)
-                assertTrue(
-                    client.waitForReady(60_000),
-                    "Child bootstrap stderr: ${Files.readString(logs.resolve("secure/stderr.log")).takeLast(8_000)}",
-                )
+                if (!client.waitForReady(60_000)) {
+                    val stderr =
+                        runCatching { Files.readString(logs.resolve("secure/stderr.log")).takeLast(8_000) }
+                            .getOrDefault("<no readable stderr log>")
+                    fail("Child bootstrap stderr: $stderr")
+                }
                 val channel = client.channel
                 val value =
                     StateServiceGrpcKt

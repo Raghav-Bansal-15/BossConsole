@@ -42,12 +42,7 @@ class TerminalOwnershipTest {
 
     @AfterTest
     fun cleanup() {
-        runBlocking {
-            val host = caller("cleanup", ProcessAuthority.HOST)
-            host.listSessions(Empty.getDefaultInstance()).sessionsList.forEach {
-                host.closeSession(close(it.sessionId))
-            }
-        }
+        service.close()
         clients.forEach { it.shutdown(0) }
         server.stop()
         root.toFile().deleteRecursively()

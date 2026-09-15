@@ -34,3 +34,11 @@ The transport marker is still required; a numeric version is not a TLS capabilit
 return null, and known services without a delegated credential fail explicitly.
 The IPC jar also stops forcing all gRPC classes to initialize at native-image build time;
 validate the paired runtime native image with its platform-dependent channel factories.
+
+Terminal sessions and retained exit output are owner-instance scoped. HOST may administer
+all sessions; SUPERVISOR does not inherit that authority. An active close requests termination
+and retains bounded exit history; a later close removes the stopped entry. Superseded owners
+cannot access that history, which HOST can remove or new admissions can evict. Unknown IDs
+return NOT_FOUND and foreign IDs PERMISSION_DENIED, so UUID existence is not confidential.
+The host-controller credential accepted by a child lives for that child's lifetime; kernel-side
+process-token revocation does not revoke this opposite direction. Terminate the child to end it.
