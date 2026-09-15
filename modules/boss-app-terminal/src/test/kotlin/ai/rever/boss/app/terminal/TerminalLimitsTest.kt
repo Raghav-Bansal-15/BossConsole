@@ -61,7 +61,8 @@ class TerminalLimitsTest {
     private val tls = IpcTlsIdentity.create()
     private val token = registry.issue("limits")
     private val server = BossIpcServer("tcp://127.0.0.1:0", registry, tls).addService(service).start()
-    private val client = BossIpcClient("tcp://127.0.0.1:${server.port}", IpcClientCredentials(tls.certificateBase64, token))
+    private val client =
+        BossIpcClient("tcp://127.0.0.1:${server.port}", IpcClientCredentials(tls.certificateBase64, token))
     private val stub = TerminalServiceGrpcKt.TerminalServiceCoroutineStub(client.channel)
     private val callerContext =
         GrpcContextElement(

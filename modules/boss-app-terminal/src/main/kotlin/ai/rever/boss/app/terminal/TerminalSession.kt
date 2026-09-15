@@ -11,6 +11,7 @@ import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.locks.ReentrantLock
 
+@Suppress("LongParameterList") // Owner identity stays immutable alongside the process and terminal dimensions.
 internal class TerminalSession(
     val id: String,
     val workingDirectory: String,
@@ -161,7 +162,9 @@ internal class TerminalSession(
                 IpcEnvironment.removeCredentials(this)
             }
             IpcCall.requireOwner(ownerInstance)
-            return TerminalSession(UUID.randomUUID().toString(), directory, command, builder.start(), cols, rows, ownerInstance)
+            return TerminalSession(
+                UUID.randomUUID().toString(), directory, command, builder.start(), cols, rows, ownerInstance,
+            )
         }
     }
 }
