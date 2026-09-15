@@ -44,7 +44,7 @@ internal class RotatingProcessLog(
             val file = if (index == 0) "$name.log" else "$name.$index.log"
             val attributes = directory.attributes(file)
             if (attributes != null && (!attributes.isRegularFile || attributes.size > maximumBytes)) {
-                directory.delete(file)
+                directory.delete(file, isDirectory = attributes.isDirectory)
             }
         }
         directory.delete(if (fileCount == 1) "$name.log" else "$name.${fileCount - 1}.log")

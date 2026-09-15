@@ -15,9 +15,12 @@ internal class ProcessLogDirectory private constructor(
 
     fun create(name: String): SeekableByteChannel = directory.file(name, create = true)
 
-    fun delete(name: String) {
+    fun delete(
+        name: String,
+        isDirectory: Boolean = false,
+    ) {
         try {
-            directory.delete(name)
+            directory.delete(name, directory = isDirectory)
         } catch (_: NoSuchFileException) {
             // Missing rotated files are expected for new logs.
         }

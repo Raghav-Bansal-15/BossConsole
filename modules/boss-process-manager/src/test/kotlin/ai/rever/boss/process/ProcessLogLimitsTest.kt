@@ -24,6 +24,18 @@ class ProcessLogLimitsTest {
     }
 
     @Test
+    fun `empty directory obstruction is replaced without recursive deletion`() {
+        Files.createDirectories(root.resolve("obstructed/stdout.log"))
+        ProcessLogDirectory.open(root, "obstructed").use { directory ->
+            RotatingProcessLog(directory, "stdout").use { writer ->
+                val bytes = "retained".toByteArray()
+                writer.append(bytes, bytes.size)
+            }
+        }
+        assertEquals("retained", Files.readString(root.resolve("obstructed/stdout.log")))
+    }
+
+    @Test
     fun `invalid process identifiers are rejected before log directories exist`() {
         val logs = root.resolve("logs")
         val spawner = ProcessSpawner("tcp://127.0.0.1:1", logs.toFile())

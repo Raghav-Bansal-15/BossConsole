@@ -47,7 +47,7 @@ internal object WindowsEntries {
     ): Boolean {
         var offset = 0L
         var proceed = true
-        while (proceed) {
+        while (proceed && offset < size) {
             check(offset <= size - 12) { "Invalid directory entry offset" }
             val next = buffer.getInt(offset).toLong() and 0xffffffffL
             val length = buffer.getInt(offset + 8)

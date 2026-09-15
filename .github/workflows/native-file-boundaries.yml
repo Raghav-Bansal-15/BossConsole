@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           ldd --version
-          ./gradlew :boss-native-files:test :boss-native-files:nativeSmokeJvm --console=plain --no-daemon
+          ./gradlew :boss-native-files:test :boss-native-files:nativeSmokeJvm :boss-process-manager:test --console=plain --no-daemon
       - uses: actions/upload-artifact@v7
         if: always()
         with:
