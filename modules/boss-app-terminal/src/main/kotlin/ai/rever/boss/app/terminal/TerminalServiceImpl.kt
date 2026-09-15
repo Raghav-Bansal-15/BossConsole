@@ -197,8 +197,9 @@ class TerminalServiceImpl(
 
     private fun session(id: String): TerminalSession {
         IpcCall.current()
-        val found = synchronized(lock) { sessions[id] }
-            ?: throw Status.NOT_FOUND.withDescription("Terminal session not found").asRuntimeException()
+        val found =
+            synchronized(lock) { sessions[id] }
+                ?: throw Status.NOT_FOUND.withDescription("Terminal session not found").asRuntimeException()
         IpcCall.requireOwner(found.ownerInstance)
         return found
     }

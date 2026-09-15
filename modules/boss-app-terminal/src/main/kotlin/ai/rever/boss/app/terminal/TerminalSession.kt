@@ -163,7 +163,13 @@ internal class TerminalSession(
             }
             IpcCall.requireOwner(ownerInstance)
             return TerminalSession(
-                UUID.randomUUID().toString(), directory, command, builder.start(), cols, rows, ownerInstance,
+                UUID.randomUUID().toString(),
+                directory,
+                command,
+                builder.start(),
+                cols,
+                rows,
+                ownerInstance,
             )
         }
     }
