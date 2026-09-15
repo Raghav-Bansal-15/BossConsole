@@ -2,7 +2,7 @@ name: 🔨 Build & Test
 
 on:
   push:
-    branches: [ main, develop, dev, 'fix/security-*', 'fix/filesystem-service-*' ]
+    branches: [ main, develop, dev ]
   pull_request:
     branches: [ main, dev ]
   workflow_dispatch:
