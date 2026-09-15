@@ -19,7 +19,11 @@ internal class FilePathPolicy(
 
     fun validate(path: String) {
         val parsed = Path.of(path)
-        require(parsed.none { it.toString() == ".." }) { "Parent traversal components are not allowed: $path" }
+        if (parsed.any { it.toString() == ".." }) {
+            throw io.grpc.Status.INVALID_ARGUMENT
+                .withDescription("Parent traversal components are not allowed: $path")
+                .asRuntimeException()
+        }
         authorize(parsed.toAbsolutePath().normalize())
     }
 

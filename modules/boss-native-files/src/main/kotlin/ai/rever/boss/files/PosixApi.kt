@@ -50,7 +50,7 @@ internal object PosixApi {
             17 -> FileAlreadyExistsException(operation)
             18 -> CrossDeviceMoveException()
             20 -> java.nio.file.NotDirectoryException(operation)
-            39, 66 -> DirectoryNotEmptyException(operation)
+            (if (mac) 66 else 39) -> DirectoryNotEmptyException(operation)
             else -> IOException("$operation failed (OS error $code)")
         }
 

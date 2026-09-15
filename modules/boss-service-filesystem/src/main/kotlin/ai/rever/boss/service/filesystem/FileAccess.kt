@@ -21,11 +21,12 @@ internal class FileAccess(
             if (followLeaf) {
                 policy.resolve(visible)
             } else {
-                val parent = requireNotNull(visible.parent) { "An entry must have a parent directory" }
+                val parent = visible.parent ?: throw invalidEntryRoot()
                 policy.resolve(parent).resolve(visible.fileName)
             }
         policy.authorize(candidate)
-        val parent = NativeDirectory.open(requireNotNull(candidate.parent), createParents, CreationPermissions.INHERIT)
+        val parent =
+            NativeDirectory.open(candidate.parent ?: throw invalidEntryRoot(), createParents, CreationPermissions.INHERIT)
         var delivered = false
         try {
             // Darwin's path comparisons are case-sensitive even on a case-insensitive volume.
@@ -92,3 +93,8 @@ internal class FileDirectoryHandle(
         }
     }
 }
+
+private fun invalidEntryRoot() =
+    io.grpc.Status.INVALID_ARGUMENT
+        .withDescription("An entry must have a parent directory")
+        .asRuntimeException()

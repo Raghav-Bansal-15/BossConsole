@@ -81,7 +81,7 @@ class FileAuthorityTest {
                 service.createFile(CreateFileRequest.newBuilder().setPath(path.toString()).build())
                 assertTrue(Files.exists(path))
             }
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<io.grpc.StatusRuntimeException> {
                 val path = root.resolve("../escape").toString()
                 service.createFile(CreateFileRequest.newBuilder().setPath(path).build())
             }
