@@ -43,7 +43,7 @@ class WorkspaceServiceImplTest {
             assertTrue(record.mkdir())
             record.resolve("sentinel").writeText("untouched")
 
-            assertFailsWith<StatusRuntimeException> {
+            assertStatus(Status.Code.INTERNAL) {
                 service.saveWorkspace(
                     SaveWorkspaceRequest
                         .newBuilder()
@@ -55,7 +55,7 @@ class WorkspaceServiceImplTest {
             val opened = service.loadWorkspace(LoadWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
             assertTrue(opened.found)
             assertEquals(before.workspace, opened.workspace)
-            assertFailsWith<StatusRuntimeException> {
+            assertStatus(Status.Code.INTERNAL) {
                 service.deleteWorkspace(DeleteWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
             }
             assertEquals(before, service.getCurrentWorkspace(Empty.getDefaultInstance()))
@@ -174,7 +174,7 @@ class WorkspaceServiceImplTest {
             Files.move(root.toPath(), root.toPath().resolveSibling("original"))
             root.mkdir()
             root.resolve("safe.json").writeText("sentinel")
-            assertFailsWith<StatusRuntimeException> {
+            assertStatus(Status.Code.FAILED_PRECONDITION) {
                 service.saveWorkspace(SaveWorkspaceRequest.newBuilder().setWorkspaceId("safe").build())
             }
             assertEquals("sentinel", root.resolve("safe.json").readText())
@@ -243,13 +243,21 @@ class WorkspaceServiceImplTest {
             Files.createSymbolicLink(link, outside.toPath())
             val service = WorkspaceServiceImpl(root)
             assertEquals(0, service.getWorkspaces(Empty.getDefaultInstance()).workspacesCount)
-            assertFailsWith<StatusRuntimeException> {
+            assertStatus(Status.Code.FAILED_PRECONDITION) {
                 service.saveWorkspace(SaveWorkspaceRequest.newBuilder().setWorkspaceId("linked").build())
             }
-            assertFailsWith<StatusRuntimeException> {
+            assertStatus(Status.Code.FAILED_PRECONDITION) {
                 service.deleteWorkspace(DeleteWorkspaceRequest.newBuilder().setWorkspaceId("linked").build())
             }
             assertTrue(outside.readText().contains("Outside"))
             assertFalse(service.getCurrentWorkspace(Empty.getDefaultInstance()).found)
         }
+
+    private inline fun assertStatus(
+        code: Status.Code,
+        action: () -> Unit,
+    ) {
+        val failure = assertFailsWith<StatusRuntimeException> { action() }
+        assertEquals(code, failure.status.code)
+    }
 }

@@ -1,6 +1,7 @@
 package ai.rever.boss.service.workspace
 
 import com.sun.jna.Memory
+import com.sun.jna.NativeLibrary
 import com.sun.jna.Platform
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.WinBase
@@ -18,6 +19,20 @@ internal object WorkspaceDirectoryIdentity {
         Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS).fileKey()
             ?: if (Platform.isWindows()) windowsIdentity(path) else throw IOException("Directory identity unavailable")
 
+    private const val FILE_ID_INFO = 18
+    private const val FILE_ID_BYTES = 24L
+
+    private fun legacyIdentity(handle: WinNT.HANDLE): String =
+        Memory(52).use { info ->
+            val read =
+                NativeLibrary
+                    .getInstance("kernel32")
+                    .getFunction("GetFileInformationByHandle")
+                    .invokeInt(arrayOf<Any>(handle, info))
+            if (read == 0) throw IOException("Filesystem does not provide a stable directory identity")
+            "legacy:${info.getInt(28)}:${info.getInt(44)}:${info.getInt(48)}"
+        }
+
     private fun windowsIdentity(path: Path): String {
         val api = Kernel32.INSTANCE
         val handle =
@@ -34,9 +49,9 @@ internal object WorkspaceDirectoryIdentity {
         try {
             // FILE_ID_INFO: 64-bit volume serial followed by the filesystem's 128-bit file ID.
             // FileIdInfo is supported on the project's Windows 10+ baseline, including ReFS.
-            return Memory(24).use { info ->
-                if (!api.GetFileInformationByHandleEx(handle, 18, info, DWORD(24))) {
-                    throw IOException("Directory identity could not be read")
+            return Memory(FILE_ID_BYTES).use { info ->
+                if (!api.GetFileInformationByHandleEx(handle, FILE_ID_INFO, info, DWORD(FILE_ID_BYTES))) {
+                    return@use legacyIdentity(handle)
                 }
                 "${info.getLong(0)}:${info.getLong(8)}:${info.getLong(16)}"
             }

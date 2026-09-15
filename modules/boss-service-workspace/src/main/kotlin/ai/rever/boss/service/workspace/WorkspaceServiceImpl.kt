@@ -3,6 +3,7 @@ package ai.rever.boss.service.workspace
 import ai.rever.boss.ipc.proto.Empty
 import ai.rever.boss.ipc.proto.services.*
 import io.grpc.Status
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,7 +60,10 @@ class WorkspaceServiceImpl(
 
     private fun directoryIdentity(): Any = WorkspaceDirectoryIdentity.read(storageRoot)
 
-    private val mutations = Mutex()
+    // Internal scheduling seam pins queued/admitted cancellation without changing production I/O dispatch.
+    internal val mutations = Mutex()
+    internal var mutationDispatcher: CoroutineDispatcher = Dispatchers.IO
+    internal var afterMutationAdmission: () -> Unit = {}
     private val workspaces = ConcurrentHashMap<String, WorkspaceInfo>()
     private val currentWorkspaceFlow = MutableStateFlow<WorkspaceInfo?>(null)
 
@@ -184,9 +188,10 @@ class WorkspaceServiceImpl(
     // Lock acquisition is cancellable. Once admitted, non-suspending disk and memory changes
     // complete together before releasing the lock, even if the caller cancels during I/O.
     private suspend fun <T> mutate(action: () -> T): T =
-        withContext(Dispatchers.IO) {
+        withContext(mutationDispatcher) {
             mutations.withLock {
                 try {
+                    afterMutationAdmission()
                     action()
                 } catch (failure: IOException) {
                     logger.warn("Workspace persistence failed ({})", failure.javaClass.simpleName)
@@ -322,6 +327,8 @@ class WorkspaceServiceImpl(
                     .setId(request.workspaceId)
                     .setName(request.name)
                     .setProjectPath(request.projectPath)
+                    .setDescription(existing?.description.orEmpty())
+                    .setTabCount(existing?.tabCount ?: 0)
                     .setCreatedAt(existing?.createdAt ?: now)
                     .setLastOpenedAt(now)
                     .putAllMetadata(request.metadataMap)
