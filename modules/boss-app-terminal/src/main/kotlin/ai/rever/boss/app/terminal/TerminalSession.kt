@@ -112,7 +112,18 @@ internal class TerminalSession(
             .build()
 
     companion object {
+        private fun validateLaunchInput(request: CreateSessionRequest) {
+            // Validate before ProcessBuilder: native environment validation differs between OS/JDK implementations.
+            require(request.commandList.all { it.isNotEmpty() && '\u0000' !in it })
+            require(
+                request.environmentMap.all { (name, value) ->
+                    name.isNotEmpty() && '=' !in name && '\u0000' !in name && '\u0000' !in value
+                },
+            )
+        }
+
         fun launch(request: CreateSessionRequest): TerminalSession {
+            validateLaunchInput(request)
             val directory = request.workingDirectory.ifBlank { System.getProperty("user.home") }
             val command =
                 request.commandList.ifEmpty {

@@ -76,14 +76,24 @@ class TerminalLimitsTest {
     @Test
     fun `invalid environment produces INVALID_ARGUMENT and returns admission`() =
         runBlocking {
-            val bad =
-                CreateSessionRequest
-                    .newBuilder()
-                    .addCommand("unused")
-                    .putEnvironment("bad=name", "value")
-                    .build()
-            val failure = assertFailsWith<StatusException> { stub.createSession(bad) }
-            assertEquals(Status.Code.INVALID_ARGUMENT, failure.status.code)
+            val invalid =
+                listOf(
+                    CreateSessionRequest
+                        .newBuilder()
+                        .addCommand("unused")
+                        .putEnvironment("bad=name", "value")
+                        .build(),
+                    CreateSessionRequest
+                        .newBuilder()
+                        .addCommand("unused")
+                        .putEnvironment("KEY", "bad\u0000value")
+                        .build(),
+                    CreateSessionRequest.newBuilder().addCommand("bad\u0000command").build(),
+                )
+            for (request in invalid) {
+                val failure = assertFailsWith<StatusException> { stub.createSession(request) }
+                assertEquals(Status.Code.INVALID_ARGUMENT, failure.status.code)
+            }
             assertTrue(start("echo").isNotBlank())
         }
 
