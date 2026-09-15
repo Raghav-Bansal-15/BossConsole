@@ -9,6 +9,7 @@ internal class ProcessOwnedLogInput(
     private val process: Process,
 ) : InputStream() {
     private var remaining: Int? = null
+    private var idleDelayMillis = MIN_IDLE_DELAY_MILLIS
 
     override fun read(): Int {
         val byte = ByteArray(1)
@@ -36,11 +37,14 @@ internal class ProcessOwnedLogInput(
             if (budget != null && (budget == 0 || available == 0)) return -1
             if (available > 0) {
                 val count = input.read(bytes, offset, minOf(length, available, budget ?: Int.MAX_VALUE))
+                if (count > 0) idleDelayMillis = MIN_IDLE_DELAY_MILLIS
                 if (budget != null && count > 0) remaining = budget - count
                 return count
             }
             try {
-                Thread.sleep(10)
+                // A fixed 10 ms delay throttles a busy small OS pipe. Back off only while idle.
+                Thread.sleep(idleDelayMillis)
+                idleDelayMillis = (idleDelayMillis * 2).coerceAtMost(MAX_IDLE_DELAY_MILLIS)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw InterruptedIOException("Process log drain interrupted")
@@ -52,5 +56,7 @@ internal class ProcessOwnedLogInput(
 
     companion object {
         private const val FINAL_BYTES = 1024 * 1024
+        private const val MIN_IDLE_DELAY_MILLIS = 1L
+        private const val MAX_IDLE_DELAY_MILLIS = 100L
     }
 }

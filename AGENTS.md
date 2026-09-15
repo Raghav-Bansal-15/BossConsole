@@ -2095,7 +2095,9 @@ lifetimes follow the owned parent, not descendant EOF. After parent exit, each p
 drains only its observed remaining snapshot (at most 1 MiB); later descendant output
 is outside this log contract. Closing the read end can give a later descendant write
 EPIPE/SIGPIPE and terminate a native descendant that has not disabled SIGPIPE. Recording failure does not stop draining a live parent's
-output. Retention is bounded per process id, not across all distinct process ids.
+output. Idle polling backs off to 100 ms and resets to 1 ms after output, so a busy
+small pipe does not pay a fixed 10 ms delay between batches. Retention is bounded
+per process id, not across all distinct process ids.
 
 **The bottom bar's "MCP: `<tool>`" status line is clickable into an activity log of the last 100
 calls this session.** Before this it was the only visibility into MCP activity at all - every
