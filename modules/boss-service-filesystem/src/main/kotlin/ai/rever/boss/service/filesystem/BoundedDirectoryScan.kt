@@ -13,6 +13,7 @@ import kotlin.coroutines.CoroutineContext
 internal class BoundedDirectoryScan(
     private val request: ScanDirectoryRequest,
     private val context: CoroutineContext,
+    private val validateTarget: (String) -> Unit,
 ) {
     private val requestedDepth = if (!request.recursive) 1 else request.maxDepth.takeIf { it > 0 } ?: Int.MAX_VALUE
     private val depth = requestedDepth.coerceAtMost(FileSystemLimits.SCAN_DEPTH)
@@ -23,6 +24,7 @@ internal class BoundedDirectoryScan(
 
     fun scan(root: Path): List<FileEntry> {
         val target = root.toRealPath()
+        validateTarget(target.toString())
         Files.walkFileTree(
             target,
             emptySet(),

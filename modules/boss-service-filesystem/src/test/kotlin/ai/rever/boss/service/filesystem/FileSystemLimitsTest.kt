@@ -54,8 +54,25 @@ class FileSystemLimitsTest {
     fun cleanup() {
         channel.shutdownNow()
         server.shutdownNow()
-        root.toFile().deleteRecursively()
+        // Files.walk does not follow symlinks; fixture aliases must never widen cleanup.
+        Files.walk(root).use { paths ->
+            paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        }
     }
+
+    @Test
+    fun `scan refuses an alias into a blocked system root`() =
+        runBlocking<Unit> {
+            org.junit.Assume.assumeTrue(Platform.isLinux())
+            val alias = Files.createSymbolicLink(root.resolve("system-alias"), Path.of("/proc"))
+            try {
+                assertFailsWith<StatusException> {
+                    stub.scanDirectory(ScanDirectoryRequest.newBuilder().setPath(alias.toString()).build())
+                }
+            } finally {
+                Files.deleteIfExists(alias)
+            }
+        }
 
     @Test
     fun `native POSIX open refuses a replaced leaf link`() {

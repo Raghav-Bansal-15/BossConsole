@@ -57,7 +57,8 @@ class FileSystemServiceImpl : FileSystemServiceGrpcKt.FileSystemServiceCoroutine
                     .build()
             }
 
-            val entries = BoundedDirectoryScan(request, currentCoroutineContext()).scan(dir.toPath().toAbsolutePath())
+            val scanner = BoundedDirectoryScan(request, currentCoroutineContext(), ::validatePath)
+            val entries = scanner.scan(dir.toPath().toAbsolutePath())
 
             ScanDirectoryResponse
                 .newBuilder()
