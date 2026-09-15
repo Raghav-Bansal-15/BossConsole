@@ -160,12 +160,14 @@ export async function storeCompletedAuthentication(
       .select()
 
     if (retry.error) {
+      console.error('Failed to store completed authentication:', authFailureDetails(retry.error))
       return { success: false, error: retry.error.message || retry.error.code }
     }
 
     return { success: true }
   }
 
+  console.error('Failed to store completed authentication:', authFailureDetails(error))
   return { success: false, error: error.message || error.code }
 }
 

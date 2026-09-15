@@ -79,7 +79,7 @@ export async function verifyCallerToken(
     const { data, error } = await supabase.auth.getUser(token)
 
     if (error || !data?.user?.id) {
-      console.error('❌ Caller token rejected:', authFailureDetails(error))
+      console.error('❌ Caller token rejected:', error ? authFailureDetails(error) : { reason: 'no_user_for_token' })
       return { success: false, error: 'Invalid or expired session', status: 401 }
     }
 

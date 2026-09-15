@@ -3,6 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 import { generateSupabaseAccessToken } from "../utils/jwt.ts";
 import { storeChallenge, cleanupExpiredChallenges } from "../utils/challenge.ts";
 import { checkAuthStatus } from "../services/auth.ts";
+import { storeCompletedAuthentication } from "../utils/database.ts";
+import { verifyCallerToken } from "../utils/authorization.ts";
 import { withErrorHandler } from "../utils/error-handler.ts";
 import { authFailureDetails } from "../utils/logging.ts";
 import { ChallengeType } from "../types/challenge.ts";
@@ -98,5 +100,37 @@ Deno.test("production challenge failures retain known codes and omit arbitrary c
       assertEquals(result.success, false);
     });
     assert(output.includes(code === refreshToken ? "unlisted" : code));
+  }
+});
+
+Deno.test("missing caller identity logs a refusal without a false failure flag", async () => {
+  const output = await capture(async () => {
+    assertEquals((await verifyCallerToken(client([{ body: {} }]), accessToken)).success, false);
+  });
+  assert(output.includes("no_user_for_token"));
+  assert(!output.includes('"failed":false'));
+});
+
+Deno.test("thrown objects retain allowlisted codes without exposing their payload", async () => {
+  const output = await capture(async () => {
+    const wrapped = withErrorHandler(async () => {
+      throw { code: "42501", message: refreshToken };
+    }, "Login unavailable");
+    assertEquals(await wrapped(), { success: false, error: "Login unavailable" });
+  });
+  assert(output.includes("42501"));
+});
+
+Deno.test("completed session storage failures log safe codes on both write paths", async () => {
+  for (const fallback of [false, true]) {
+    const output = await capture(async () => {
+      const responses = fallback ? [{ body: { code: "42P10", message: "missing constraint" }, status: 400 }] : [];
+      responses.push({ body: { code: "42501", message: refreshToken }, status: 403 });
+      assertEquals((await storeCompletedAuthentication(client(responses), {
+        challenge, sessionId, userId: user.id, email: user.email,
+        accessToken, refreshToken, expiresAt: Date.now() + 60_000,
+      })).success, false);
+    });
+    assert(output.includes("42501"));
   }
 });

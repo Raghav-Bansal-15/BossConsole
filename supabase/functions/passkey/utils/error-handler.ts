@@ -50,7 +50,7 @@ export function withGenericErrorHandler<TArgs extends unknown[], TResult, TError
       return await fn(...args)
     } catch (error) {
       const err = error instanceof Error ? error : new Error("Unknown service failure")
-      console.error(`${logPrefix} Error:`, authFailureDetails(err))
+      console.error(`${logPrefix} Error:`, authFailureDetails(error))
       return onError(err)
     }
   }
