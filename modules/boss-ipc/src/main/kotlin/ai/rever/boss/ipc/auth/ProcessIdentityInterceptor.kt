@@ -76,7 +76,14 @@ class ProcessIdentityInterceptor(
                 ServerCallHandler<ReqT, RespT> { incoming, metadata ->
                     CallCoroutineContext(callJob).interceptCall(incoming, metadata, next)
                 }
-            val listener = Contexts.interceptCall(context, guardedCall, headers, cancellableHandler)
+            // Revocation can close admission synchronously while the listener is being registered.
+            // Never dispatch even a non-coroutine handler after that refusal.
+            val listener =
+                if (finished.get()) {
+                    object : ServerCall.Listener<ReqT>() { }
+                } else {
+                    Contexts.interceptCall(context, guardedCall, headers, cancellableHandler)
+                }
             bound = true
             return object : ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT>(listener) {
                 override fun onCancel() {
