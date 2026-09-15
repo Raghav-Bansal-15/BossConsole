@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 class WorkspaceMutationTest {
     @get:Rule val temporary = TemporaryFolder()
 
-    @Test
+    @Test(timeout = 30_000)
     fun queuedCancellationDoesNotMutateStorageOrMemory() =
         runBlocking {
             val root = temporary.newFolder()
@@ -38,7 +38,7 @@ class WorkspaceMutationTest {
             assertTrue(root.resolve("next.json").isFile)
         }
 
-    @Test
+    @Test(timeout = 30_000)
     fun admittedCancellationCommitsConsistentlyAndReleasesMutex() =
         runBlocking {
             val root = temporary.newFolder()
@@ -47,13 +47,13 @@ class WorkspaceMutationTest {
             service.afterMutationAdmission = { admitted.cancel() }
             admitted.start()
             admitted.join()
+            assertFalse(service.mutations.isLocked)
             assertTrue(admitted.isCancelled)
             val reloaded = WorkspaceServiceImpl(root).getWorkspaces(Empty.getDefaultInstance()).workspacesList
             assertEquals(reloaded, service.getWorkspaces(Empty.getDefaultInstance()).workspacesList)
             assertEquals("admitted", reloaded.single().id)
             service.afterMutationAdmission = {}
             service.saveWorkspace(save("next"))
-            assertFalse(service.mutations.isLocked)
             assertTrue(root.resolve("next.json").isFile)
         }
 
