@@ -26,7 +26,11 @@ internal class FileAccess(
             }
         policy.authorize(candidate)
         val parent =
-            NativeDirectory.open(candidate.parent ?: throw invalidEntryRoot(), createParents, CreationPermissions.INHERIT)
+            NativeDirectory.open(
+                candidate.parent ?: throw invalidEntryRoot(),
+                createParents,
+                CreationPermissions.INHERIT,
+            )
         var delivered = false
         try {
             // Darwin's path comparisons are case-sensitive even on a case-insensitive volume.
