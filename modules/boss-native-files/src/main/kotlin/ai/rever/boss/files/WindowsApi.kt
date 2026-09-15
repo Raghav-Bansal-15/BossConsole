@@ -6,6 +6,7 @@ import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import java.io.IOException
 import java.nio.file.AccessDeniedException
+import java.nio.file.DirectoryNotEmptyException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.NoSuchFileException
 
@@ -24,6 +25,7 @@ internal object WindowsApi {
             80, 183 -> FileAlreadyExistsException(operation)
             17 -> CrossDeviceMoveException()
             267 -> java.nio.file.NotDirectoryException(operation)
+            145 -> DirectoryNotEmptyException(operation)
             else -> IOException("$operation failed (OS error $code)")
         }
 

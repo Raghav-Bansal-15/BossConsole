@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.AccessDeniedException
+import java.nio.file.DirectoryNotEmptyException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.NoSuchFileException
 import java.nio.file.NotDirectoryException
@@ -148,22 +149,11 @@ class FileSystemServiceImpl internal constructor(
         withContext(Dispatchers.IO) {
             try {
                 access.entry(request.path, request.createParents || request.isDirectory).use { entry ->
-                    // Directory creation retains the legacy mkdirs behavior, including parent creation.
-                    // Preserve createFile's existing idempotence when the entry already exists.
-                    if (entry.parent.info(entry.name) == null) {
-                        try {
-                            if (request.isDirectory) {
-                                entry.parent
-                                    .child(entry.name, create = true, permissions = CreationPermissions.INHERIT)
-                                    .close()
-                            } else {
-                                entry.parent
-                                    .file(entry.name, create = true, permissions = CreationPermissions.INHERIT)
-                                    .close()
-                            }
-                        } catch (_: FileAlreadyExistsException) {
-                            // Another creator won the exclusive create. Its entry is left intact.
-                        }
+                    // mkdirs remains idempotent; regular-file creation is exclusive.
+                    if (request.isDirectory) {
+                        entry.parent.child(entry.name, create = true, permissions = CreationPermissions.INHERIT).close()
+                    } else {
+                        entry.parent.file(entry.name, create = true, permissions = CreationPermissions.INHERIT).close()
                     }
                 }
             } catch (failure: IOException) {
@@ -181,6 +171,8 @@ class FileSystemServiceImpl internal constructor(
                     val work = DeleteWork(currentCoroutineContext(), request.recursive)
                     delete(entry.parent, entry.name, entry.canonical, work)
                 }
+            } catch (_: NoSuchFileException) {
+                // Missing deletes remain idempotent, including a missing parent.
             } catch (failure: IOException) {
                 throw fileStatus(failure, "Delete", request.path)
             }
@@ -286,9 +278,28 @@ private fun fileStatus(
             is FileAlreadyExistsException -> Status.ALREADY_EXISTS
             is NoSuchFileException -> Status.NOT_FOUND
             is AccessDeniedException -> Status.PERMISSION_DENIED
+            is DirectoryNotEmptyException -> Status.FAILED_PRECONDITION
             else -> Status.INTERNAL
         }
-    return StatusException(code.withDescription("$operation failed: $path (${failure.message})").withCause(failure))
+    val description =
+        when {
+            failure is FileAlreadyExistsException && operation == "Create" -> {
+                "File already exists: $path"
+            }
+
+            failure is DirectoryNotEmptyException && operation == "Delete" -> {
+                "Cannot delete non-empty directory without recursive=true: $path"
+            }
+
+            failure is AccessDeniedException -> {
+                "Access denied: $path"
+            }
+
+            else -> {
+                "$operation failed: $path (${failure.message})"
+            }
+        }
+    return StatusException(code.withDescription(description).withCause(failure))
 }
 
 private class DeleteWork(

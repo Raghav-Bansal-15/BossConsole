@@ -83,7 +83,11 @@ jobs:
           retention-days: 7
 
   old-glibc:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     container: eclipse-temurin:17-jdk-focal
     timeout-minutes: 20
     steps:
@@ -96,5 +100,5 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: native-file-boundaries-glibc-2.31
+          name: native-file-boundaries-glibc-2.31-${{ matrix.runner }}
           path: modules/boss-native-files/build/test-results/

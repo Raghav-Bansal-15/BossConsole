@@ -349,20 +349,22 @@ class FileSystemLimitsTest {
     @Test
     fun `a refused delete is reported instead of returning Empty as success`() =
         runBlocking {
+            val occupied = Files.createDirectory(root.resolve("occupied"))
+            Files.writeString(occupied.resolve("child"), "preserved")
             val failure =
                 assertFailsWith<StatusException> {
                     stub.deleteFile(
                         DeleteFileRequest
                             .newBuilder()
-                            .setPath(root.resolve("never-existed").toString())
+                            .setPath(occupied.toString())
                             .build(),
                     )
                 }
-            assertEquals(Status.Code.NOT_FOUND, failure.status.code)
+            assertEquals(Status.Code.FAILED_PRECONDITION, failure.status.code)
             assertTrue(
                 failure.status.description
                     .orEmpty()
-                    .contains("never-existed"),
+                    .contains("occupied"),
                 "got: ${failure.status.description}",
             )
             val deleted = root.resolve("deletable")

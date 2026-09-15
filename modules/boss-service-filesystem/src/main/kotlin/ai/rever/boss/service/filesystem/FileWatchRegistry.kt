@@ -290,7 +290,7 @@ private class Registrations(
 }
 
 /** At most 128 held directories (8 MiB Windows buffers), shared by at most eight streams. */
-private object WatchResources {
+internal object WatchResources {
     val streams = Semaphore(8)
     val directories = Semaphore(128)
 }

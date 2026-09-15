@@ -12,13 +12,14 @@ internal object WindowsReplacement {
         target: Pointer,
         parent: Pointer,
         name: String,
+        moveSource: () -> Unit = { WindowsRename.move(source, parent, name, false) },
     ) {
         val backup = ".boss-replace-${UUID.randomUUID()}"
         // Move the held link, never delete it before the source move succeeds. Exclusive
         // renames also refuse a concurrent replacement instead of overwriting somebody else.
         WindowsRename.move(target, parent, backup, false)
         try {
-            WindowsRename.move(source, parent, name, false)
+            moveSource()
         } catch (failure: IOException) {
             try {
                 WindowsRename.move(target, parent, name, false)
