@@ -58,6 +58,7 @@ class RemotePluginRepository(
         try {
             action()
         } catch (cancelled: CancellationException) {
+            // CancellationException extends IllegalStateException; it must be handled before cache refusals.
             throw cancelled
         } catch (failure: java.io.IOException) {
             cacheUnavailable(operation, failure)

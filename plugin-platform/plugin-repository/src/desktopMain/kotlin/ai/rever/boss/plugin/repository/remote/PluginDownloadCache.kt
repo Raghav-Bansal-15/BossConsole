@@ -47,7 +47,9 @@ class PluginDownloadCache(
     ): File? {
         val path = cacheFile(pluginId, version)
         if (!Files.isRegularFile(path, NOFOLLOW_LINKS) || readMetadata(path) == null) {
-            logger.warn(LogCategory.SYSTEM, "Ignoring plugin cache entry with invalid identity metadata")
+            if (Files.exists(path, NOFOLLOW_LINKS)) {
+                logger.warn(LogCategory.SYSTEM, "Ignoring plugin cache entry with invalid identity metadata")
+            }
             return null
         }
         val digest = MessageDigest.getInstance("SHA-256")
