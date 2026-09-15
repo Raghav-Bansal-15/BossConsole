@@ -2093,7 +2093,8 @@ log directory; setup failures must not expose credential-bearing environment val
 Each process id shares one rotating writer across overlapping generations. Drain
 lifetimes follow the owned parent, not descendant EOF. After parent exit, each pipe
 drains only its observed remaining snapshot (at most 1 MiB); later descendant output
-is outside this log contract. Recording failure does not stop draining a live parent's
+is outside this log contract. Closing the read end can give a later descendant write
+EPIPE/SIGPIPE and terminate a native descendant that has not disabled SIGPIPE. Recording failure does not stop draining a live parent's
 output. Retention is bounded per process id, not across all distinct process ids.
 
 **The bottom bar's "MCP: `<tool>`" status line is clickable into an activity log of the last 100

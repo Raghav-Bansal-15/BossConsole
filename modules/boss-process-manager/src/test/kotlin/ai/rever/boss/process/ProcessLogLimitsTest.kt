@@ -95,7 +95,7 @@ class ProcessLogLimitsTest {
                 val drain =
                     CompletableFuture.runAsync {
                         val counting =
-                            object : FilterInputStream(process.inputStream) {
+                            object : FilterInputStream(ProcessOwnedLogInput(process.inputStream, process)) {
                                 override fun read(
                                     bytes: ByteArray,
                                     offset: Int,

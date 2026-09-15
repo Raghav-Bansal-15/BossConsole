@@ -28,8 +28,10 @@ internal class ProcessOwnedLogInput(
     ): Int {
         while (true) {
             // A fixed post-exit snapshot cannot be extended by a descendant's later writes.
+            // Observe exit before sampling bytes, or a final write between the two can be lost.
+            val alive = process.isAlive
             val available = input.available()
-            if (remaining == null && !process.isAlive) remaining = available.coerceAtMost(FINAL_BYTES)
+            if (remaining == null && !alive) remaining = available.coerceAtMost(FINAL_BYTES)
             val budget = remaining
             if (budget != null && (budget == 0 || available == 0)) return -1
             if (available > 0) {
