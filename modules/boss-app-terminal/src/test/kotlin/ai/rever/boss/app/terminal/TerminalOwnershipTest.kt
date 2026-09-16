@@ -42,12 +42,7 @@ class TerminalOwnershipTest {
 
     @AfterTest
     fun cleanup() {
-        runBlocking {
-            val host = caller("cleanup", ProcessAuthority.HOST)
-            host.listSessions(Empty.getDefaultInstance()).sessionsList.forEach {
-                host.closeSession(close(it.sessionId))
-            }
-        }
+        service.close()
         clients.forEach { it.shutdown(0) }
         server.stop()
         root.toFile().deleteRecursively()
@@ -116,7 +111,7 @@ class TerminalOwnershipTest {
                 val betaSessions = beta.listSessions(Empty.getDefaultInstance()).sessionsList
                 assertEquals(listOf(betaSession), betaSessions.map { it.sessionId })
                 assertEquals(2, host.listSessions(Empty.getDefaultInstance()).sessionsCount)
-                host.closeSession(close(id))
+                closeAndRemoveHistory(host, id)
                 assertEquals(0, alpha.listSessions(Empty.getDefaultInstance()).sessionsCount)
             }
         }
@@ -132,10 +127,22 @@ class TerminalOwnershipTest {
                 assertEquals(0, replacement.listSessions(Empty.getDefaultInstance()).sessionsCount)
                 refused(Status.Code.PERMISSION_DENIED) { replacement.streamOutput(stream(id)).toList() }
                 val host = caller("host", ProcessAuthority.HOST)
-                host.closeSession(close(id))
+                closeAndRemoveHistory(host, id)
                 assertEquals(0, host.listSessions(Empty.getDefaultInstance()).sessionsCount)
             }
         }
+
+    private suspend fun closeAndRemoveHistory(
+        host: TerminalServiceGrpcKt.TerminalServiceCoroutineStub,
+        id: String,
+    ) {
+        host.closeSession(close(id))
+        // Bounded terminal history retains exit output until a stopped session is explicitly removed.
+        while (host.listSessions(Empty.getDefaultInstance()).sessionsList.any { it.sessionId == id }) {
+            host.closeSession(close(id))
+            delay(10)
+        }
+    }
 
     private suspend fun assertOwnedOutput(
         client: TerminalServiceGrpcKt.TerminalServiceCoroutineStub,
