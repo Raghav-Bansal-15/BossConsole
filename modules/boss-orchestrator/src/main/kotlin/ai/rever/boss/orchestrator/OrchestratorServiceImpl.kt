@@ -1,12 +1,13 @@
 package ai.rever.boss.orchestrator
 
+import ai.rever.boss.ipc.auth.IpcCall
 import ai.rever.boss.ipc.proto.*
 import ai.rever.boss.process.ProcessRegistry
 import io.grpc.Status
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Semaphore
 import org.slf4j.LoggerFactory
 import java.util.UUID
@@ -47,6 +48,7 @@ class OrchestratorServiceImpl(
     private val _healthEvents = MutableSharedFlow<HealthEvent>(extraBufferCapacity = 64)
 
     override suspend fun reportFailure(request: ProcessFailureReport): RepairAction {
+        IpcCall.requireHost()
         if (!analysisSlots.tryAcquire()) throw exhausted("Concurrent repair analysis limit reached; retry later")
         try {
             return analyzeFailure(request)
@@ -59,6 +61,7 @@ class OrchestratorServiceImpl(
         logger.info("Received failure report for process: {}", request.processId)
 
         val outcome = repairEngine.handleFailure(request)
+        IpcCall.requireHost()
         val repairId = UUID.randomUUID().toString()
         val strategy = outcomeToStrategy(outcome)
         val action = buildRepairAction(repairId, strategy, outcome, request)
@@ -126,6 +129,7 @@ class OrchestratorServiceImpl(
     }
 
     override suspend fun getHealthDashboard(request: Empty): HealthDashboard {
+        IpcCall.requireHost()
         val processes = processRegistry?.getAllProcesses() ?: emptyList()
         val statuses =
             processes.map { proc ->
@@ -159,6 +163,7 @@ class OrchestratorServiceImpl(
     }
 
     override suspend fun getRepairHistory(request: RepairHistoryRequest): RepairHistoryResponse {
+        IpcCall.requireHost()
         val entries =
             synchronized(stateLock) { repairHistory.values.toList() }
                 .let { all ->
@@ -183,6 +188,7 @@ class OrchestratorServiceImpl(
     }
 
     override suspend fun approveRepair(request: RepairApproval): RepairApprovalResponse {
+        IpcCall.requireHost()
         val pending =
             synchronized(stateLock) {
                 pendingRepairs[request.repairId]?.takeUnless { it.claimed }?.also { it.claimed = true }
@@ -241,7 +247,7 @@ class OrchestratorServiceImpl(
                 }
             }
         } else {
-            logger.info("Repair {} rejected by user: {}", request.repairId, request.userNotes)
+            logger.info("Repair {} rejected by user", request.repairId)
             RepairApprovalResponse
                 .newBuilder()
                 .setApplied(false)
@@ -251,7 +257,14 @@ class OrchestratorServiceImpl(
 
     private fun exhausted(message: String) = Status.RESOURCE_EXHAUSTED.withDescription(message).asRuntimeException()
 
-    override fun watchHealth(request: Empty): Flow<HealthEvent> = _healthEvents.asSharedFlow()
+    override fun watchHealth(request: Empty): Flow<HealthEvent> =
+        flow {
+            IpcCall.requireHost()
+            _healthEvents.collect {
+                IpcCall.requireHost()
+                emit(it)
+            }
+        }
 
     private fun buildRepairAction(
         repairId: String,
