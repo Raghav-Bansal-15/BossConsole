@@ -1,3 +1,4 @@
+import { authFailureDetails } from "./utils/logging.ts"
 /**
  * Passkey Edge Function
  *
@@ -73,7 +74,7 @@ app.post("/maintenance/cleanup", async (ctx) => {
   if (result.success) {
     return ctx.json({ message: "Cleanup completed successfully" }, 200)
   } else {
-    return ctx.json({ error: 'Internal server error' }, 500)
+    return ctx.json({ error: result.error }, 500)
   }
 })
 
@@ -125,8 +126,8 @@ app.notFound((ctx) => {
 
 // Global error handler
 app.onError((err, ctx) => {
-  console.error('Global error:', err)
-  return ctx.json({ error: 'Internal server error' }, 500)
+  console.error('Global error:', authFailureDetails(err))
+  return ctx.json({ error: err.message }, 500)
 })
 
 Deno.serve(app.fetch)
