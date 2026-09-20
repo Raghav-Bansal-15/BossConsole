@@ -75,7 +75,13 @@ jobs:
       # The action's own verify step already fails on NotSigned. This asserts the
       # two things it cannot: that the status reached the caller as an output, and
       # that OUR certificate did the signing rather than something pre-existing.
+      #
+      # Guarded on can_sign because fork PRs receive no secrets at all: the
+      # action then skips signing, reports NotSigned and exits with a warning -
+      # that path is correct behavior, not a failure. When credentials ARE
+      # present a broken signature still fails here and inside the action.
       - name: ✅ Assert the action signed it with our certificate
+        if: steps.sign.outputs.can_sign == 'true'
         shell: powershell
         env:
           REPORTED: ${{ steps.sign.outputs.status }}
