@@ -123,7 +123,7 @@ runs:
 
     - name: Install DigiCert STM client tools
       if: steps.check-secret.outputs.can_sign == 'true'
-      uses: digicert/ssm-code-signing@v1.2.1
+      uses: digicert/ssm-code-signing@1d820463733701cf1484c7eb5d7d24a15ca2c454 # v1.2.1
       env:
         SM_HOST: ${{ inputs.cert-host }}
         SM_API_KEY: ${{ inputs.api-key }}
