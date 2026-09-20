@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
@@ -401,7 +402,21 @@ class FileAuthorityTest {
                 delay(500)
                 if (windows) {
                     // NTFS refuses this rename while descendant notification handles are open.
-                    assertFailsWith<java.nio.file.AccessDeniedException> { Files.move(original, renamed) }
+                    // Registration reaches the server asynchronously over the transport, so wait
+                    // until the refusal proves the handles are held; a move that lands before
+                    // that is moved back and retried rather than mistaken for a real rename.
+                    withTimeout(30_000) {
+                        var refused = false
+                        while (!refused) {
+                            try {
+                                Files.move(original, renamed)
+                                Files.move(renamed, original)
+                                delay(100)
+                            } catch (_: AccessDeniedException) {
+                                refused = true
+                            }
+                        }
+                    }
                 } else {
                     Files.move(original, renamed)
                 }
@@ -410,7 +425,19 @@ class FileAuthorityTest {
                 assertEquals(expected.toString(), event.await().path)
             }
             if (windows) {
-                Files.move(original, renamed)
+                // The cancelled watch releases its server-side handles asynchronously; the
+                // rename lands once the release completes.
+                withTimeout(30_000) {
+                    var moved = false
+                    while (!moved) {
+                        try {
+                            Files.move(original, renamed)
+                            moved = true
+                        } catch (_: AccessDeniedException) {
+                            delay(100)
+                        }
+                    }
+                }
                 assertEquals("still watched", Files.readString(renamed.resolve("nested/after-rename")))
             }
         }
