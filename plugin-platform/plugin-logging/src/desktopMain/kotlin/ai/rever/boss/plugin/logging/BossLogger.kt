@@ -438,21 +438,7 @@ object BossLogger {
             recentLogs.addLast(sanitized)
         }
 
-        // Format message for SLF4J. The throwable is rendered into the text
-        // through the sanitizer rather than passed to SLF4J as an argument:
-        // the backend would print its message and every `Caused by:` line
-        // raw, and those are exactly the places a credential lands.
-        val formattedMessage =
-            buildString {
-                append("[${sanitized.category}]")
-                append(" ${sanitized.component}: ${sanitized.message}")
-                if (sanitized.data != null) {
-                    append(" | ${sanitized.data}")
-                }
-                sanitized.error?.let { error ->
-                    append('\n').append(LogSanitizer.sanitizeStackTrace(error.stackTraceToString()))
-                }
-            }
+        val formattedMessage = formatForSlf4j(sanitized)
 
         // Log to SLF4J (which outputs to stdout, captured by GlobalLogCapture)
         when (sanitized.level) {
@@ -495,6 +481,24 @@ object BossLogger {
         // Notify listeners
         notifyListeners(sanitized)
     }
+
+    /**
+     * Format an entry for SLF4J. The throwable is rendered into the text
+     * through the sanitizer rather than passed to SLF4J as an argument:
+     * the backend would print its message and every `Caused by:` line
+     * raw, and those are exactly the places a credential lands.
+     */
+    private fun formatForSlf4j(entry: LogEntry): String =
+        buildString {
+            append("[${entry.category}]")
+            append(" ${entry.component}: ${entry.message}")
+            if (entry.data != null) {
+                append(" | ${entry.data}")
+            }
+            entry.error?.let { error ->
+                append('\n').append(LogSanitizer.sanitizeStackTrace(error.stackTraceToString()))
+            }
+        }
 
     /**
      * Format epoch milliseconds to human-readable timestamp.
