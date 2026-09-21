@@ -510,6 +510,9 @@ object LogSanitizer {
             "error_description",
             "id_token",
             "session_token",
+            "session_id",
+            "sessionid",
+            "challenge",
             "api_key",
             "key",
             "secret",
@@ -532,6 +535,9 @@ object LogSanitizer {
             "key",
             "credential",
             "credential_id",
+            "session_id",
+            "sessionid",
+            "challenge",
         )
 
     /**
@@ -598,15 +604,21 @@ object LogSanitizer {
      * camelCase boundaries, so `SUPABASE_ANON_KEY`, `api_key` and `apiKey` all
      * yield a "key" word while `KEYBOARD_LAYOUT` yields "keyboard".
      *
-     * The multi-word entries of [sensitiveValueNames] ("access_token",
-     * "credential_id", ...) can never equal a single word; their "token", "key"
-     * and "credential" words do, so nothing is left uncovered.
+     * The multi-word entries of [sensitiveValueNames] are checked twice: the
+     * whole name after camelCase normalisation, so `sessionId` equals
+     * "session_id" even though neither of its words is sensitive, and per word,
+     * so `access_token` is covered by its "token" word. The per-word pass alone
+     * leaves "session_id" uncovered — "session" and "id" are both ordinary
+     * words that appear in names like `sessionCount` or `messageId` whose
+     * values are diagnostics, not credentials.
      */
-    private fun nameMarksSecret(name: String): Boolean =
-        name
-            .replace(camelCaseBoundary, "_")
-            .split('_', '-', '.')
-            .any { word -> word.isNotEmpty() && sensitiveValueNames.any { word.equals(it, ignoreCase = true) } }
+    private fun nameMarksSecret(name: String): Boolean {
+        val normalized = name.replace(camelCaseBoundary, "_")
+        return sensitiveValueNames.any { normalized.equals(it, ignoreCase = true) } ||
+            normalized
+                .split('_', '-', '.')
+                .any { word -> word.isNotEmpty() && sensitiveValueNames.any { word.equals(it, ignoreCase = true) } }
+    }
 
     /**
      * The shared body of [sanitizeExceptionMessage] and [sanitizeStackTrace].

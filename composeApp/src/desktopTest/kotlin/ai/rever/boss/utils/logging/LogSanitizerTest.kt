@@ -155,6 +155,24 @@ class LogSanitizerTest {
         assertEquals("boss://auth/verify", result)
     }
 
+    @Test
+    fun `maskUriParams redacts challenge and sessionId parameters`() {
+        // The passkey deep-link vocabulary: sessionId arrives camelCase and the
+        // challenge is what a passkey signs, so both are credential material.
+        assertEquals(
+            "boss://auth?challenge=[REDACTED]&type=signup",
+            LogSanitizer.maskUriParams("boss://auth?challenge=abc123&type=signup"),
+        )
+        assertEquals(
+            "boss://auth/callback?sessionId=[REDACTED]",
+            LogSanitizer.maskUriParams("boss://auth/callback?sessionId=sess-9f8e7d6c5b"),
+        )
+        assertEquals(
+            "boss://auth/callback?session_id=[REDACTED]",
+            LogSanitizer.maskUriParams("boss://auth/callback?session_id=sess-9f8e7d6c5b"),
+        )
+    }
+
     // =========================================================================
     // looksLikeSecret Tests
     // =========================================================================
@@ -290,6 +308,24 @@ class LogSanitizerTest {
     fun `sanitizeMap handles empty map`() {
         val result = LogSanitizer.sanitizeMap(emptyMap())
         assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun `sanitizeMap redacts sessionId session_id and challenge keys`() {
+        // sessionId is how the passkey status endpoint is polled; a challenge is
+        // the value a passkey signs. Neither word-splits into a known secret
+        // name, so this is the case that used to pass through untouched.
+        val input =
+            mapOf(
+                "sessionId" to "sess-9f8e7d6c5b",
+                "session_id" to "sess-9f8e7d6c5b",
+                "challenge" to "ch-4a3b2c1d",
+            )
+        val result = LogSanitizer.sanitizeMap(input)
+
+        assertEquals("[REDACTED]", result["sessionId"])
+        assertEquals("[REDACTED]", result["session_id"])
+        assertEquals("[REDACTED]", result["challenge"])
     }
 
     // =========================================================================
@@ -615,6 +651,33 @@ class LogSanitizerTest {
     fun `sanitizeExceptionMessage does not mistake a version number for a hostname`() {
         val message = "requires gradle 9.5.8 or newer"
         assertEquals(message, LogSanitizer.sanitizeExceptionMessage(message))
+    }
+
+    @Test
+    fun `sanitizeExceptionMessage masks a sessionId carried in a status path`() {
+        // SupabaseApiClient.checkAuthenticationStatus embeds the session id in the
+        // URL path (GET /passkey/auth/status/{sessionId}), so a ktor exception
+        // message carries it there rather than in a name=value pair.
+        val result =
+            LogSanitizer.sanitizeExceptionMessage(
+                "GET https://api.example.com/functions/v1/passkey/auth/status/sess-9f8e7d6c5b failed with 500",
+            )
+
+        assertFalse(result.contains("sess-9f8e7d6c5b"), "session id leaked through the status path: $result")
+    }
+
+    @Test
+    fun `sanitizeExceptionMessage masks a sessionId assignment and query parameter`() {
+        // The camelCase name has to match "session_id" after camelCase
+        // normalisation; word-splitting alone yields "session" and "id", neither
+        // of which marks a secret.
+        val assignment =
+            LogSanitizer.sanitizeExceptionMessage("status check failed for sessionId=sess-9f8e7d6c5b4a")
+        assertEquals("status check failed for sessionId=ses...b4a", assignment)
+
+        val queryParam =
+            LogSanitizer.sanitizeExceptionMessage("deep link rejected: boss://auth/cb?sessionId=sess-9f8e7d6c5b4a")
+        assertFalse(queryParam.contains("sess-9f8e7d6c5b4a"), "sessionId param leaked: $queryParam")
     }
 
     // =========================================================================
