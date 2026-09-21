@@ -134,6 +134,16 @@ internal const val PLUGIN_DEV_RELOAD_TIMEOUT_MS = 45_000L
  */
 internal const val MAX_REQUEST_BYTES = 1024 * 1024
 
+/**
+ * Longest URL a [VERB_OPEN] request may carry, in UTF-8 bytes.
+ *
+ * Well past a fully percent-encoded maximum-length file path (~100 KB), yet far
+ * under [MAX_REQUEST_BYTES]: the URL is untrusted input from any program that
+ * can ask the OS to open a link, so it gets its own bound rather than the whole
+ * request budget.
+ */
+internal const val MAX_FORWARD_URL_BYTES = 256 * 1024
+
 // Reserve 1368 wire bytes for the protocol, token and up to 256 UTF-8 tool-name characters.
 internal const val MAX_ARGUMENT_BYTES = 768 * 1024 - 1024
 internal const val MAX_TOOL_NAME_LENGTH = 256
@@ -267,7 +277,11 @@ internal fun parseRequestLine(line: String): SingleInstanceRequest? {
         }
 
         VERB_OPEN -> {
-            if (parts.size == 5) {
+            // The URL is the rest of the line, so it can never itself contain a
+            // line break — but a raw control character can still arrive mid-line
+            // (a hand-rolled sender, a stray CR). A well-formed URL carries none:
+            // anything needing one arrives percent-encoded.
+            if (parts.size == 5 && parts[4].none { it.isISOControl() }) {
                 SingleInstanceRequest(token, VERB_OPEN, DeepLinkOrigin.fromWireLabel(parts[3]), parts[4])
             } else {
                 null
@@ -329,12 +343,29 @@ private fun decodeBase64Args(base64Payload: String): String? {
     }
 }
 
-/** Builds the line [parseRequestLine] reads. Never log the result: it carries the token. */
+/**
+ * Builds the line [parseRequestLine] reads, or null when [url] cannot occupy one
+ * line safely. Never log the result: it carries the token.
+ *
+ * The framing is `\n`-delimited, so a URL containing a raw newline or carriage
+ * return would smuggle a second line into the stream. Rejecting is the safe
+ * answer — a legitimate URL is already percent-encoded, so refusing control
+ * characters loses no real link. The byte cap bounds what the framing writes
+ * into a single request.
+ */
 internal fun formatOpenRequest(
     token: String,
     origin: DeepLinkOrigin,
     url: String,
-): String = "$PROTOCOL_VERSION $token $VERB_OPEN ${origin.name} $url"
+): String? {
+    if (url.isBlank() ||
+        url.any { it.isISOControl() } ||
+        url.toByteArray(StandardCharsets.UTF_8).size > MAX_FORWARD_URL_BYTES
+    ) {
+        return null
+    }
+    return "$PROTOCOL_VERSION $token $VERB_OPEN ${origin.name} $url"
+}
 
 /** Builds a liveness probe line. Never log the result: it carries the token. */
 internal fun formatPingRequest(token: String): String = "$PROTOCOL_VERSION $token $VERB_PING"
@@ -1531,12 +1562,24 @@ object SingleInstanceManager {
 
         val response =
             SingleInstanceFiles.read()?.let { target ->
+                val request = formatOpenRequest(target.token, origin, url)
+                if (request == null) {
+                    // A URL that cannot occupy one line is refused here, before
+                    // the connection opens: sending it would inject a second
+                    // framed line the peer only partially reads.
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Refusing to forward a URL that cannot be framed safely",
+                        mapOf("urlBytes" to url.toByteArray(StandardCharsets.UTF_8).size),
+                    )
+                    return false
+                }
                 logger.debug(
                     LogCategory.SYSTEM,
                     "Attempting to connect to existing instance",
                     mapOf("transport" to target.transport.name, "endpoint" to target.endpoint),
                 )
-                SingleInstanceWire.exchange(target, formatOpenRequest(target.token, origin, url))
+                SingleInstanceWire.exchange(target, request)
             }
 
         if (response == RESPONSE_OK) {
