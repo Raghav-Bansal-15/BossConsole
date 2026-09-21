@@ -43,6 +43,7 @@ class ShutdownSequenceTest {
         assertEquals(
             listOf(
                 "saving Last Session on exit",
+                "awaiting window plugin teardown",
                 "stopping performance monitor",
                 "closing browser engine",
                 "closing favicon HTTP client",
