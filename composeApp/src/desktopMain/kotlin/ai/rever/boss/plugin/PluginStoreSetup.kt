@@ -5,6 +5,7 @@ import ai.rever.boss.components.plugin.DynamicPluginInfo
 import ai.rever.boss.components.plugin.DynamicPluginManager
 import ai.rever.boss.components.plugin.HotReloadPolicy
 import ai.rever.boss.components.plugin.PersistedPluginEntry
+import ai.rever.boss.components.plugin.isContainedPath
 import ai.rever.boss.config.GitHubConfig
 import ai.rever.boss.config.SupabaseClientConfig
 import ai.rever.boss.plugin.api.PluginState
@@ -1787,7 +1788,13 @@ object PluginStoreSetup {
         dynamicPluginManager: DynamicPluginManager,
         persistedPlugins: List<PluginPersistence.InstalledPluginEntry>,
         devRoot: File = DevPluginArtifacts.stagingRoot(),
+        pluginsDir: File = _pluginDir,
     ): Map<String, Result<DynamicPluginInfo>> {
+        // A persisted jarPath is untrusted input (installed.json is plain JSON):
+        // loading it verbatim would be an arbitrary-JAR load primitive. Confine it
+        // to the managed locations - the plugins dir and the dev staging root,
+        // which is where resolvePersistedEntryPath's dev-swap answers live.
+        val allowedRoots = listOf(pluginsDir, devRoot)
         val entries =
             persistedPlugins.map { entry ->
                 PersistedPluginEntry(
@@ -1797,7 +1804,7 @@ object PluginStoreSetup {
                 )
             }
 
-        val initialResults = dynamicPluginManager.loadPersistedPlugins(entries)
+        val initialResults = dynamicPluginManager.loadPersistedPlugins(entries, allowedRoots)
         val finalResults = initialResults.toMutableMap()
         val persistedById = persistedPlugins.associateBy { it.pluginId }
 
@@ -1820,6 +1827,7 @@ object PluginStoreSetup {
                         pluginId = pluginId,
                         entry = entry,
                         attemptedPath = attemptedPath,
+                        allowedRoots = allowedRoots,
                         devError =
                             result.exceptionOrNull()
                                 ?: IllegalStateException(
@@ -1839,14 +1847,26 @@ object PluginStoreSetup {
         pluginId: String,
         entry: PluginPersistence.InstalledPluginEntry,
         attemptedPath: String?,
+        allowedRoots: List<File>,
         devError: Throwable?,
     ): Result<DynamicPluginInfo>? {
         val isDevBuildSwap =
             attemptedPath != null &&
                 attemptedPath != entry.jarPath &&
                 DevPluginArtifacts.isDevPluginJar(File(attemptedPath))
+        // The fallback loads the raw persisted jarPath - the same untrusted
+        // input the initial load was confined for, so apply the same
+        // containment here or the dev-swap path would re-open the primitive.
+        val storeContained = isContainedPath(entry.jarPath, allowedRoots)
         val storeJar = File(entry.jarPath)
-        if (!isDevBuildSwap || !storeJar.exists()) {
+        if (!isDevBuildSwap || !storeContained || !storeJar.exists()) {
+            if (isDevBuildSwap && !storeContained) {
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "Refusing dev-fallback store JAR outside the managed roots",
+                    mapOf("pluginId" to pluginId, "jarPath" to entry.jarPath),
+                )
+            }
             return null
         }
 

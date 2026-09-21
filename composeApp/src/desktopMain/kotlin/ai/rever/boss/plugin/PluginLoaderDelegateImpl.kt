@@ -10,6 +10,8 @@ import ai.rever.boss.components.plugin.HotReloadPolicy
 import ai.rever.boss.components.plugin.MicrokernelRuntime
 import ai.rever.boss.components.plugin.ReloadJarCandidates
 import ai.rever.boss.components.plugin.findRelocatedPluginJar
+import ai.rever.boss.components.plugin.isContainedPath
+import ai.rever.boss.components.plugin.managedPluginJarRoots
 import ai.rever.boss.components.plugin.resolveReloadJarPath
 import ai.rever.boss.components.registery.PanelComponentStoreRegistry
 import ai.rever.boss.components.window_panel.SplitViewStateRegistry
@@ -427,8 +429,22 @@ class PluginLoaderDelegateImpl(
             // parses installed.json and, on a cold cache, opens every plugin jar's manifest.
             val jarPath =
                 withContext(Dispatchers.IO) {
-                    val persistedJarPath =
+                    // The persisted record is installed.json input: refuse to let a
+                    // hand-edited row aim a reload at a jar outside the managed
+                    // roots. Containing it here also confines the relocation search
+                    // dir below, which falls back to this path's parent.
+                    val rawPersistedJarPath =
                         PluginPersistence.getInstalledPlugins().firstOrNull { it.pluginId == pluginId }?.jarPath
+                    val persistedJarPath =
+                        rawPersistedJarPath
+                            ?.takeIf { isContainedPath(it, managedPluginJarRoots()) }
+                    if (rawPersistedJarPath != null && persistedJarPath == null) {
+                        logger.warn(
+                            LogCategory.SYSTEM,
+                            "Ignoring persisted reload jar path outside the managed roots",
+                            mapOf("pluginId" to pluginId, "jarPath" to rawPersistedJarPath),
+                        )
+                    }
                     resolveReloadJarPath(
                         candidates =
                             ReloadJarCandidates(

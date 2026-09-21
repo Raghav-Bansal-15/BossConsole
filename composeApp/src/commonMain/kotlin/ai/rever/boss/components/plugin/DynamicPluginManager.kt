@@ -1950,11 +1950,26 @@ class DynamicPluginManager(
         // Resolving first also keeps a plugin running when no reload is possible.
         val jarPath =
             withContext(Dispatchers.IO) {
+                // The persisted candidate is installed.json input - attacker-shaped
+                // rows must not redirect a reload at an outside jar. The loaded
+                // jarPath is the path this plugin actually loaded from, so it
+                // keeps its own trust (external installs live outside the roots).
+                val persistedCandidate = persistedReloadJarPath?.invoke(pluginId)
+                val persistedJarPath =
+                    persistedCandidate
+                        ?.takeIf { isContainedPath(it, managedPluginJarRoots()) }
+                if (persistedCandidate != null && persistedJarPath == null) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Ignoring persisted reload jar path outside the managed roots",
+                        mapOf("pluginId" to pluginId, "jarPath" to persistedCandidate),
+                    )
+                }
                 resolveReloadJarPath(
                     candidates =
                         ReloadJarCandidates(
                             loadedJarPath = info.jarPath,
-                            persistedJarPath = persistedReloadJarPath?.invoke(pluginId),
+                            persistedJarPath = persistedJarPath,
                         ),
                     exists = { java.io.File(it).isFile },
                     relocated = {
@@ -2097,10 +2112,20 @@ class DynamicPluginManager(
      * Load plugins from persisted state.
      * This should be called during application startup to restore previously installed plugins.
      *
+     * [allowedRoots] is the set of directories a persisted JAR path is allowed to
+     * live under (the managed plugins directory and the dev-staging root). The
+     * persisted row is plain JSON on disk: whoever can write installed.json could
+     * otherwise aim jarPath at ANY jar on the filesystem and have startup load it.
+     * Entries outside every allowed root are refused and their row left in place
+     * for inspection - fail closed, never silently load, never silently drop.
+     *
      * @param plugins List of plugin entries with JAR paths and enabled states
      * @return Map of plugin IDs to their load results
      */
-    suspend fun loadPersistedPlugins(plugins: List<PersistedPluginEntry>): Map<String, Result<DynamicPluginInfo>> {
+    suspend fun loadPersistedPlugins(
+        plugins: List<PersistedPluginEntry>,
+        allowedRoots: List<java.io.File> = managedPluginJarRoots(),
+    ): Map<String, Result<DynamicPluginInfo>> {
         val results = mutableMapOf<String, Result<DynamicPluginInfo>>()
 
         logger.info(
@@ -2113,14 +2138,36 @@ class DynamicPluginManager(
 
         for (entry in plugins) {
             try {
+                // The check canonicalizes; the loaded path keeps its persisted
+                // spelling, so in-root entries behave exactly as before.
                 var jarFile = java.io.File(entry.jarPath)
+                if (!isContainedPath(entry.jarPath, allowedRoots)) {
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Refusing persisted plugin JAR outside the managed roots",
+                        mapOf(
+                            "pluginId" to entry.pluginId,
+                            "jarPath" to entry.jarPath,
+                        ),
+                    )
+                    results[entry.pluginId] =
+                        Result.failure(
+                            Exception("Persisted JAR path is outside the managed plugin roots: ${entry.jarPath}"),
+                        )
+                    continue
+                }
                 if (!jarFile.exists()) {
                     // The background system-plugin updater can replace a JAR
                     // (new versioned filename, old file deleted) between the
                     // persisted snapshot being read and this entry's turn —
                     // the path goes stale while the plugin sits right there
                     // under a new name. Re-resolve by pluginId before giving up.
-                    val relocated = findRelocatedPluginJar(jarFile.parentFile, entry.pluginId)
+                    // jarFile passed containment, so its parent is inside an
+                    // allowed root; the relocation result is re-checked anyway -
+                    // a symlink inside the dir must not smuggle the search outside.
+                    val relocated =
+                        findRelocatedPluginJar(jarFile.parentFile, entry.pluginId)
+                            ?.takeIf { isContainedPath(it.absolutePath, allowedRoots) }
                     if (relocated == null) {
                         logger.warn(
                             LogCategory.SYSTEM,
@@ -2631,11 +2678,48 @@ internal fun pluginAccessAllowed(
 }
 
 /**
+ * Whether [path] canonically lives under one of [allowedRoots] (the roots are
+ * canonicalized too - symlinks and `..` segments are resolved on both sides, so
+ * neither spelling nor a link inside the dir can escape the root). A path that
+ * cannot be canonicalized is refused rather than passed through: the callers
+ * treat persisted jar paths as untrusted input.
+ * Top-level so it can be unit-tested (see [pluginAccessAllowed] for the same pattern).
+ */
+internal fun isContainedPath(
+    path: String,
+    allowedRoots: List<java.io.File>,
+): Boolean {
+    val candidate = runCatching { java.io.File(path).canonicalFile }.getOrNull() ?: return false
+    return allowedRoots.any { root ->
+        runCatching { candidate.toPath().startsWith(root.canonicalFile.toPath()) }
+            .getOrDefault(false)
+    }
+}
+
+/**
+ * The locations a persisted plugin JAR path is allowed to live under: the managed
+ * plugins directory and the dev-staging root (dev-swap installs answer from
+ * there). Everything that legitimately lands in installed.json is written under
+ * one of these, so any persisted path resolving elsewhere is attacker-shaped
+ * and must be refused rather than loaded.
+ */
+internal fun managedPluginJarRoots(): List<java.io.File> =
+    listOf(
+        ai.rever.boss.plugin.pathutils.BossDirectories.resolve("plugins"),
+        ai.rever.boss.plugin.launchpad.DevPluginArtifacts.stagingRoot(),
+    )
+
+/**
  * The best jar in [dir] whose manifest pluginId matches [pluginId], or null.
  * Fallback for a persisted jar path gone stale because a background update
  * replaced the file under a new versioned name: highest parseable manifest
  * version wins, newest file breaks ties. Top-level so it can be unit-tested
  * (see [pluginAccessAllowed] for the same pattern).
+ *
+ * Containment is the CALLER's job: this scans whatever [dir] it is given, so a
+ * caller whose search dir or result derives from a persisted path must run both
+ * through [isContainedPath] - [DynamicPluginManager.loadPersistedPlugins]
+ * does exactly that.
  *
  * Highest-version assumption: this path only triggers when the persisted
  * file is GONE — i.e. after a delete-and-replace, where highest == intended.
