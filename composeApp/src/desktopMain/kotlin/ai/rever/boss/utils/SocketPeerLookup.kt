@@ -53,7 +53,7 @@ internal object SocketPeerLookup {
             }
         } catch (e: IOException) {
             // An unreadable table is "cannot say", not "nobody owns it".
-            logger.debug(LogCategory.SYSTEM, "Socket-owner lookup failed to read /proc", error = e)
+            logger.debug(LogCategory.SYSTEM, "Socket-owner lookup failed to read /proc: ${e.message}")
             null
         }
 
@@ -221,7 +221,7 @@ internal object SocketPeerLookup {
             val bytes = runCatching { output.get(5, TimeUnit.SECONDS) }.getOrNull() ?: return null
             String(bytes, Charsets.UTF_8).lines()
         } catch (e: IOException) {
-            logger.debug(LogCategory.SYSTEM, "Socket-owner lookup tool could not run", error = e)
+            logger.debug(LogCategory.SYSTEM, "Socket-owner lookup tool could not run: ${e.message}")
             null
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
