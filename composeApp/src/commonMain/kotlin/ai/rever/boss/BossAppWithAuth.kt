@@ -58,14 +58,22 @@ fun ComponentContext.BossAppWithAuth(
                     val regex = Regex("sessionId=([^&]+)")
                     regex.find(uri)?.groupValues?.get(1)
                 } catch (_: Exception) {
-                    logger.warn(LogCategory.AUTH, "Failed to extract sessionId from deep link", mapOf("uri" to LogSanitizer.maskUriParams(uri)))
+                    logger.warn(
+                        LogCategory.AUTH,
+                        "Failed to extract sessionId from deep link",
+                        mapOf("uri" to LogSanitizer.maskUriParams(uri)),
+                    )
                     null
                 }
 
             when {
                 uri.contains("passkey/registered") -> {
                     sessionId?.let { id ->
-                        logger.info(LogCategory.AUTH, "Passkey registration completed", mapOf("sessionId" to LogSanitizer.maskSessionId(id)))
+                        logger.info(
+                            LogCategory.AUTH,
+                            "Passkey registration completed",
+                            mapOf("sessionId" to LogSanitizer.maskSessionId(id)),
+                        )
                         PasskeySessionEventHandler.handleRegistrationCompleted(id)
                     }
                     DeepLinkHandler.clearDeepLink()
@@ -73,7 +81,11 @@ fun ComponentContext.BossAppWithAuth(
 
                 uri.contains("passkey/authenticated") -> {
                     sessionId?.let { id ->
-                        logger.info(LogCategory.AUTH, "Passkey authentication completed", mapOf("sessionId" to LogSanitizer.maskSessionId(id)))
+                        logger.info(
+                            LogCategory.AUTH,
+                            "Passkey authentication completed",
+                            mapOf("sessionId" to LogSanitizer.maskSessionId(id)),
+                        )
 
                         // Trigger the polling check to complete authentication
                         coroutineScope.launch {
@@ -81,12 +93,20 @@ fun ComponentContext.BossAppWithAuth(
                             // an immediate check when we receive the deep link
                             val metadata = PasskeySessionEventHandler.getSessionMetadata(id)
                             metadata?.let { session ->
-                                logger.debug(LogCategory.AUTH, "Checking authentication status", mapOf("sessionId" to LogSanitizer.maskSessionId(id)))
+                                logger.debug(
+                                    LogCategory.AUTH,
+                                    "Checking authentication status",
+                                    mapOf("sessionId" to LogSanitizer.maskSessionId(id)),
+                                )
 
                                 // Notify that authentication completed
                                 PasskeySessionEventHandler.handleAuthenticationCompleted(id)
                             } ?: run {
-                                logger.warn(LogCategory.AUTH, "No metadata found for session", mapOf("sessionId" to LogSanitizer.maskSessionId(id)))
+                                logger.warn(
+                                    LogCategory.AUTH,
+                                    "No metadata found for session",
+                                    mapOf("sessionId" to LogSanitizer.maskSessionId(id)),
+                                )
                             }
                         }
                     }
