@@ -2381,27 +2381,31 @@ class DynamicPluginManager(
             ),
         )
 
-        // Uninstall all plugins
-        for (pluginId in _pluginStates.value.keys.toList()) {
-            uninstallPlugin(
-                pluginId = pluginId,
-                force = true,
-                waitForGC = false,
-                closeTabsAcrossWindows = closeTabsAcrossWindows,
-            )
+        try {
+            // Uninstall all plugins
+            for (pluginId in _pluginStates.value.keys.toList()) {
+                uninstallPlugin(
+                    pluginId = pluginId,
+                    force = true,
+                    waitForGC = false,
+                    closeTabsAcrossWindows = closeTabsAcrossWindows,
+                )
+            }
+        } finally {
+            // Deregister before cancelling, so nothing can pick this manager as a live one after
+            // it has unloaded everything. Previously this relied on the WeakReference being
+            // collected, which leaves a disposed manager in `activeManagers()` for an unbounded
+            // time - and its callers all assume "live": `isPluginKnown` and `jarPathOf` would
+            // answer from it, the api hot swap would try to reload into it, and a process-wide
+            // holder that resolves a manager lazily (HomeCatalogAccess's installer) would hand
+            // it an install that lands nowhere. In `finally` because the window-teardown caller
+            // bounds this with a timeout, and a timed-out uninstall must not skip deregistration.
+            liveManagers.removeIf { it.get() === this || it.get() == null }
+            restartDependentPlugin = null
+
+            // Cancel scope
+            managerScope.cancel()
         }
-
-        // Deregister before cancelling, so nothing can pick this manager as a live one after it
-        // has unloaded everything. Previously this relied on the WeakReference being collected,
-        // which leaves a disposed manager in `activeManagers()` for an unbounded time - and its
-        // callers all assume "live": `isPluginKnown` and `jarPathOf` would answer from it, the api
-        // hot swap would try to reload into it, and a process-wide holder that resolves a manager
-        // lazily (HomeCatalogAccess's installer) would hand it an install that lands nowhere.
-        liveManagers.removeIf { it.get() === this || it.get() == null }
-        restartDependentPlugin = null
-
-        // Cancel scope
-        managerScope.cancel()
     }
 
     /**

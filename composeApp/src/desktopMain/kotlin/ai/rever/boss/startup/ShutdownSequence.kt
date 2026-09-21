@@ -2,6 +2,7 @@ package ai.rever.boss.startup
 
 import ai.rever.boss.app.LastSessionCoordinator
 import ai.rever.boss.cache.HighQualityFaviconService
+import ai.rever.boss.components.plugin.DefaultPlugin
 import ai.rever.boss.performance.PerformanceMonitor
 import ai.rever.boss.plugin.PluginStoreSetup
 import ai.rever.boss.plugin.browser.FluckEngine
@@ -10,6 +11,7 @@ import ai.rever.boss.updater.UpdateCoordinator
 import ai.rever.boss.utils.SingleInstanceManager
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.window.AWTKeyboardInterceptor
+import kotlinx.coroutines.runBlocking
 
 /**
  * A named step in the shutdown sequence.
@@ -36,6 +38,14 @@ object ShutdownSequence {
                 // composition, so the window-dispose save never runs: macOS
                 // app-menu Quit / Cmd+Q, ApplicationRestarter's exitProcess paths, SIGTERM.
                 LastSessionCoordinator.instance.saveOnProcessExit()
+            },
+            ShutdownStep("awaiting window plugin teardown") {
+                // Window close deliberately does not join plugin teardown - joining is the
+                // b07 UI stall. Here, at process exit, is the one place that may wait:
+                // bounded, so a wedged teardown cannot hang quit either.
+                runBlocking {
+                    DefaultPlugin.awaitPendingTeardowns(DefaultPlugin.PLUGIN_DISPOSE_TIMEOUT_MS)
+                }
             },
             ShutdownStep("stopping performance monitor") {
                 PerformanceMonitor.stop()

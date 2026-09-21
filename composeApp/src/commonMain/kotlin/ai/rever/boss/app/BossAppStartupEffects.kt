@@ -468,7 +468,9 @@ internal fun BossAppStartupEffects(state: BossAppState) {
             // Panels must release resources before this window's plugin classloaders close,
             // during window teardown. Store disposal is idempotent.
             state.panelComponentStore.dispose()
-            // Cleanup plugin coroutines
+            // Cleanup plugin coroutines. dispose() returns immediately - the teardown runs on
+            // the plugin's own background scope and must not be joined here: this is the UI
+            // thread, and blocking it is exactly the stall it exists to prevent.
             plugin.dispose()
             // NOTE: the updater is NOT torn down here. It is process-wide; the
             // first window to close used to cancel periodic checks and in-flight
