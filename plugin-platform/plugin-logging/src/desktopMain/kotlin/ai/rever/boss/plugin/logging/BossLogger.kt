@@ -423,44 +423,57 @@ object BossLogger {
             return
         }
 
+        // Central redaction. Data maps were previously interpolated raw into
+        // stdout and the log file, so one unmasked call site put a secret on
+        // disk permanently. Sanitising here, once, means every downstream
+        // channel (recentLogs, listeners, SLF4J, the file writer) sees the
+        // same redacted fields instead of relying on each caller to remember.
+        val sanitized = entry.copy(data = entry.data?.let { LogSanitizer.sanitizeMap(it) })
+
         // Store in recent logs
         synchronized(recentLogsLock) {
             if (recentLogs.size >= MAX_LOG_ENTRIES) {
                 recentLogs.removeFirst()
             }
-            recentLogs.addLast(entry)
+            recentLogs.addLast(sanitized)
         }
 
-        // Format message for SLF4J
+        // Format message for SLF4J. The throwable is rendered into the text
+        // through the sanitizer rather than passed to SLF4J as an argument:
+        // the backend would print its message and every `Caused by:` line
+        // raw, and those are exactly the places a credential lands.
         val formattedMessage =
             buildString {
-                append("[${entry.category}]")
-                append(" ${entry.component}: ${entry.message}")
-                if (entry.data != null) {
-                    append(" | ${entry.data}")
+                append("[${sanitized.category}]")
+                append(" ${sanitized.component}: ${sanitized.message}")
+                if (sanitized.data != null) {
+                    append(" | ${sanitized.data}")
+                }
+                sanitized.error?.let { error ->
+                    append('\n').append(LogSanitizer.sanitizeStackTrace(error.stackTraceToString()))
                 }
             }
 
         // Log to SLF4J (which outputs to stdout, captured by GlobalLogCapture)
-        when (entry.level) {
+        when (sanitized.level) {
             LogLevel.TRACE -> {
-                slf4jLogger.trace(formattedMessage, entry.error)
+                slf4jLogger.trace(formattedMessage)
             }
 
             LogLevel.DEBUG -> {
-                slf4jLogger.debug(formattedMessage, entry.error)
+                slf4jLogger.debug(formattedMessage)
             }
 
             LogLevel.INFO -> {
-                slf4jLogger.info(formattedMessage, entry.error)
+                slf4jLogger.info(formattedMessage)
             }
 
             LogLevel.WARN -> {
-                slf4jLogger.warn(formattedMessage, entry.error)
+                slf4jLogger.warn(formattedMessage)
             }
 
             LogLevel.ERROR -> {
-                slf4jLogger.error(formattedMessage, entry.error)
+                slf4jLogger.error(formattedMessage)
             }
 
             LogLevel.OFF -> { /* no-op */ }
@@ -468,7 +481,7 @@ object BossLogger {
 
         // Queue for async file logging
         if (fileLoggingEnabled) {
-            val result = fileWriteChannel.trySend(entry)
+            val result = fileWriteChannel.trySend(sanitized)
             if (result.isFailure) {
                 val count = droppedLogCount.incrementAndGet()
                 val now = System.currentTimeMillis()
@@ -480,7 +493,7 @@ object BossLogger {
         }
 
         // Notify listeners
-        notifyListeners(entry)
+        notifyListeners(sanitized)
     }
 
     /**
@@ -515,7 +528,7 @@ object BossLogger {
                         append(" | ${entry.data}")
                     }
                     if (entry.error != null) {
-                        append("\n  Exception: ${entry.error.message}")
+                        append("\n  Exception: ${LogSanitizer.sanitizeExceptionMessage(entry.error.message)}")
                         // Use configurable stack trace depth
                         val frames =
                             if (stackTraceDepth <= 0) {
