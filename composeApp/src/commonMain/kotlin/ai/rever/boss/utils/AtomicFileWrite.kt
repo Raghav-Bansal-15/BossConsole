@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 
 /**
@@ -91,7 +92,8 @@ fun File.atomicWriteText(text: String) {
  * links (macOS `/var`, a symlinked home) stay legal because `toRealPath` pins the write to
  * the directory they resolve to right now - a later swap of the declared path cannot
  * redirect a write that no longer goes through it. Where the filesystem reports a POSIX
- * owner, the directory must also belong to the user running this process.
+ * owner, a directory owned by another user is refused unless it is world-writable shared
+ * scratch (`/tmp` and friends are root-owned by convention).
  *
  * Closing the last sliver of the swap race - a link landing between the refusal check and
  * the resolve - needs a held directory fd (O_NOFOLLOW/openat), which java.nio does not
@@ -127,9 +129,13 @@ private fun Path.throwIfNotDirectory() {
 
 private fun Path.throwIfNotOwnedByCurrentUser() {
     val posix = Files.getFileAttributeView(this, PosixFileAttributeView::class.java) ?: return
-    val owner = posix.readAttributes().owner().name
+    val attributes = posix.readAttributes()
+    val owner = attributes.owner().name
     val currentUser = System.getProperty("user.name")
-    if (owner != currentUser) {
+    // Another user's private directory must not absorb our write; a world-writable one
+    // (/tmp and friends, root-owned by convention) is shared scratch space and legal.
+    val foreignPrivate = owner != currentUser && PosixFilePermission.OTHERS_WRITE !in attributes.permissions()
+    if (foreignPrivate) {
         throw IOException("Refusing to write into $this: owned by $owner, this process runs as $currentUser")
     }
 }
