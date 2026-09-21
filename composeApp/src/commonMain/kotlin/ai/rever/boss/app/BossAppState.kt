@@ -190,6 +190,7 @@ internal class BossAppState(
 
     // Keep every external request until the operator answers its own prompt.
     val terminalCommandApprovals = TerminalCommandApprovalQueue()
+    val urlOpenApprovals = UrlOpenApprovalQueue()
 
     // An MCP tool execution requested by an AI agent that is suspended waiting
     // for operator approval under an ASK policy.
@@ -280,6 +281,19 @@ internal class BossAppState(
 internal class PendingTerminalCommand(
     val command: String,
     val workingDirectory: String?,
+)
+
+/**
+ * A URL held back for the operator's confirmation.
+ *
+ * BOSS reaches this state when a `boss://url?url=` request arrives over a path
+ * any program can drive, rather than from the operator's own `boss` invocation
+ * (see `DeepLinkOrigin`). The URL is carried verbatim so the prompt shows
+ * exactly what a tab would open.
+ */
+internal class PendingUrlOpen(
+    val url: String,
+    val title: String,
 )
 
 /**
