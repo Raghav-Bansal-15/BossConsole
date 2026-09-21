@@ -524,6 +524,7 @@ object LogSanitizer {
             "error_description",
             "id_token",
             "session_token",
+            "session",
             "api_key",
             "key",
             "secret",
@@ -549,6 +550,7 @@ object LogSanitizer {
             "key",
             "credential",
             "credential_id",
+            "session",
         )
 
     /**
@@ -649,6 +651,11 @@ object LogSanitizer {
      * minus credential parameters, so central redaction does not blank out the
      * fields a log exists to carry. A credential *shape* (a JWT, a vendor key)
      * is still masked wherever it appears, allowlist or not.
+     *
+     * Length alone does not mask here. [looksLikeSecret] treats any value of
+     * 20+ characters as secret-shaped, which was tolerable when callers opted
+     * in map by map; applied centrally to every entry it eats the diagnostics
+     * a log exists to carry — thread names, resource names, plugin ids.
      */
     fun sanitizeMap(map: Map<String, Any?>?): Map<String, Any?> {
         if (map == null) return emptyMap()
@@ -660,7 +667,6 @@ object LogSanitizer {
                 value is String && credentialShapePattern.containsMatchIn(value) -> maskToken(value)
                 value is String && lowerKey in diagnosticTextKeys -> sanitizeLogMessage(value)
                 value is String && lowerKey in diagnosticLocatorKeys -> maskUriParams(value)
-                value is String && looksLikeSecret(value) -> maskToken(value)
                 else -> value
             }
         }
