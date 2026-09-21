@@ -14,12 +14,14 @@ import ai.rever.boss.plugin.api.PluginSandboxRef
 import ai.rever.boss.plugin.api.PluginState
 import ai.rever.boss.plugin.api.PluginUnloadAware
 import ai.rever.boss.plugin.api.TabRegistry
+import ai.rever.boss.plugin.launchpad.DevPluginArtifacts
 import ai.rever.boss.plugin.loader.DynamicPluginLoaderImpl
 import ai.rever.boss.plugin.loader.PluginApiLevelException
 import ai.rever.boss.plugin.loader.PluginBinaryIncompatibilityException
 import ai.rever.boss.plugin.loader.PluginBossVersionException
 import ai.rever.boss.plugin.loader.PluginManifestReader
 import ai.rever.boss.plugin.loader.PluginUnloadException
+import ai.rever.boss.plugin.pathutils.BossDirectories
 import ai.rever.boss.plugin.sandbox.InProcessPluginSandbox
 import ai.rever.boss.plugin.sandbox.PluginErrorClassifier
 import ai.rever.boss.plugin.sandbox.PluginExecutionBoundary
@@ -1949,49 +1951,10 @@ class DynamicPluginManager(
         // it meant one click could force-unload several plugins and fail to bring them back.
         // Resolving first also keeps a plugin running when no reload is possible.
         val jarPath =
-            withContext(Dispatchers.IO) {
-                // The persisted candidate is installed.json input - attacker-shaped
-                // rows must not redirect a reload at an outside jar. The loaded
-                // jarPath is the path this plugin actually loaded from, so it
-                // keeps its own trust (external installs live outside the roots).
-                val persistedCandidate = persistedReloadJarPath?.invoke(pluginId)
-                val persistedJarPath =
-                    persistedCandidate
-                        ?.takeIf { isContainedPath(it, managedPluginJarRoots()) }
-                if (persistedCandidate != null && persistedJarPath == null) {
-                    logger.warn(
-                        LogCategory.SYSTEM,
-                        "Ignoring persisted reload jar path outside the managed roots",
-                        mapOf("pluginId" to pluginId, "jarPath" to persistedCandidate),
-                    )
-                }
-                resolveReloadJarPath(
-                    candidates =
-                        ReloadJarCandidates(
-                            loadedJarPath = info.jarPath,
-                            persistedJarPath = persistedJarPath,
-                        ),
-                    exists = { java.io.File(it).isFile },
-                    relocated = {
-                        findRelocatedPluginJar(java.io.File(info.jarPath).parentFile, pluginId)?.absolutePath
-                    },
-                    manifestVersion = { path ->
-                        // No swallow here: a manifest that fails to read must reach the resolver's
-                        // runCatching so onManifestVersionReadFailed logs the candidate instead of it
-                        // being silently scored as version-less.
-                        PluginManifestReader.readFromJar(path).version
-                    },
-                    onManifestVersionReadFailed = { path ->
-                        logger.warn(
-                            LogCategory.SYSTEM,
-                            "Could not read manifest version of a reload candidate jar",
-                            mapOf("pluginId" to pluginId, "path" to path),
-                        )
-                    },
+            resolveReloadJar(info)
+                ?: return Result.failure(
+                    Exception("Cannot reload $pluginId - no existing JAR (loaded from ${info.jarPath})"),
                 )
-            } ?: return Result.failure(
-                Exception("Cannot reload $pluginId - no existing JAR (loaded from ${info.jarPath})"),
-            )
 
         logger.info(
             LogCategory.SYSTEM,
@@ -2018,6 +1981,53 @@ class DynamicPluginManager(
 
         return installPlugin(jarPath, enabled = wasEnabled)
     }
+
+    /**
+     * The JAR a reload of [info] should load, resolved against the disk - never
+     * straight from the loaded record. The persisted candidate is installed.json
+     * input, so it is confined to the managed roots first: attacker-shaped rows
+     * must not redirect a reload at an outside jar. The loaded jarPath keeps its
+     * own trust (external installs live outside the roots).
+     */
+    private suspend fun resolveReloadJar(info: DynamicPluginInfo): String? =
+        withContext(Dispatchers.IO) {
+            resolveReloadJarPath(
+                candidates =
+                    ReloadJarCandidates(
+                        loadedJarPath = info.jarPath,
+                        persistedJarPath =
+                            confinedPersistedJarPath(
+                                persistedReloadJarPath?.invoke(info.manifest.pluginId),
+                            ) { refused ->
+                                logger.warn(
+                                    LogCategory.SYSTEM,
+                                    "Ignoring persisted reload jar path outside the managed roots",
+                                    mapOf("pluginId" to info.manifest.pluginId, "jarPath" to refused),
+                                )
+                            },
+                    ),
+                exists = { java.io.File(it).isFile },
+                relocated = {
+                    findRelocatedPluginJar(
+                        java.io.File(info.jarPath).parentFile,
+                        info.manifest.pluginId,
+                    )?.absolutePath
+                },
+                manifestVersion = { path ->
+                    // No swallow here: a manifest that fails to read must reach the resolver's
+                    // runCatching so onManifestVersionReadFailed logs the candidate instead of it
+                    // being silently scored as version-less.
+                    PluginManifestReader.readFromJar(path).version
+                },
+                onManifestVersionReadFailed = { path ->
+                    logger.warn(
+                        LogCategory.SYSTEM,
+                        "Could not read manifest version of a reload candidate jar",
+                        mapOf("pluginId" to info.manifest.pluginId, "path" to path),
+                    )
+                },
+            )
+        }
 
     /**
      * Reload all installed plugins.
@@ -2154,65 +2164,65 @@ class DynamicPluginManager(
                         Result.failure(
                             Exception("Persisted JAR path is outside the managed plugin roots: ${entry.jarPath}"),
                         )
-                    continue
-                }
-                if (!jarFile.exists()) {
-                    // The background system-plugin updater can replace a JAR
-                    // (new versioned filename, old file deleted) between the
-                    // persisted snapshot being read and this entry's turn —
-                    // the path goes stale while the plugin sits right there
-                    // under a new name. Re-resolve by pluginId before giving up.
-                    // jarFile passed containment, so its parent is inside an
-                    // allowed root; the relocation result is re-checked anyway -
-                    // a symlink inside the dir must not smuggle the search outside.
-                    val relocated =
-                        findRelocatedPluginJar(jarFile.parentFile, entry.pluginId)
-                            ?.takeIf { isContainedPath(it.absolutePath, allowedRoots) }
-                    if (relocated == null) {
-                        logger.warn(
+                } else {
+                    if (!jarFile.exists()) {
+                        // The background system-plugin updater can replace a JAR
+                        // (new versioned filename, old file deleted) between the
+                        // persisted snapshot being read and this entry's turn —
+                        // the path goes stale while the plugin sits right there
+                        // under a new name. Re-resolve by pluginId before giving up.
+                        // jarFile passed containment, so its parent is inside an
+                        // allowed root; the relocation result is re-checked anyway -
+                        // a symlink inside the dir must not smuggle the search outside.
+                        val relocated =
+                            findRelocatedPluginJar(jarFile.parentFile, entry.pluginId)
+                                ?.takeIf { isContainedPath(it.absolutePath, allowedRoots) }
+                        if (relocated == null) {
+                            logger.warn(
+                                LogCategory.SYSTEM,
+                                "Persisted plugin JAR not found",
+                                mapOf(
+                                    "pluginId" to entry.pluginId,
+                                    "jarPath" to entry.jarPath,
+                                ),
+                            )
+                            results[entry.pluginId] = Result.failure(Exception("JAR file not found: ${entry.jarPath}"))
+                            continue
+                        }
+                        logger.info(
                             LogCategory.SYSTEM,
-                            "Persisted plugin JAR not found",
+                            "Persisted JAR path stale - loading relocated jar",
                             mapOf(
                                 "pluginId" to entry.pluginId,
-                                "jarPath" to entry.jarPath,
+                                "staleJarPath" to entry.jarPath,
+                                "jarPath" to relocated.absolutePath,
                             ),
                         )
-                        results[entry.pluginId] = Result.failure(Exception("JAR file not found: ${entry.jarPath}"))
-                        continue
+                        jarFile = relocated
                     }
-                    logger.info(
-                        LogCategory.SYSTEM,
-                        "Persisted JAR path stale - loading relocated jar",
-                        mapOf(
-                            "pluginId" to entry.pluginId,
-                            "staleJarPath" to entry.jarPath,
-                            "jarPath" to relocated.absolutePath,
-                        ),
-                    )
-                    jarFile = relocated
-                }
 
-                val result = installPlugin(jarFile.absolutePath, enabled = entry.enabled)
-                results[entry.pluginId] = result
+                    val result = installPlugin(jarFile.absolutePath, enabled = entry.enabled)
+                    results[entry.pluginId] = result
 
-                if (result.isSuccess) {
-                    logger.info(
-                        LogCategory.SYSTEM,
-                        "Loaded persisted plugin",
-                        mapOf(
-                            "pluginId" to entry.pluginId,
-                            "enabled" to entry.enabled,
-                        ),
-                    )
-                } else {
-                    logger.error(
-                        LogCategory.SYSTEM,
-                        "Failed to load persisted plugin",
-                        mapOf(
-                            "pluginId" to entry.pluginId,
-                            "error" to (result.exceptionOrNull()?.message ?: "unknown"),
-                        ),
-                    )
+                    if (result.isSuccess) {
+                        logger.info(
+                            LogCategory.SYSTEM,
+                            "Loaded persisted plugin",
+                            mapOf(
+                                "pluginId" to entry.pluginId,
+                                "enabled" to entry.enabled,
+                            ),
+                        )
+                    } else {
+                        logger.error(
+                            LogCategory.SYSTEM,
+                            "Failed to load persisted plugin",
+                            mapOf(
+                                "pluginId" to entry.pluginId,
+                                "error" to (result.exceptionOrNull()?.message ?: "unknown"),
+                            ),
+                        )
+                    }
                 }
             } catch (e: Throwable) {
                 logger.error(
@@ -2705,9 +2715,26 @@ internal fun isContainedPath(
  */
 internal fun managedPluginJarRoots(): List<java.io.File> =
     listOf(
-        ai.rever.boss.plugin.pathutils.BossDirectories.resolve("plugins"),
-        ai.rever.boss.plugin.launchpad.DevPluginArtifacts.stagingRoot(),
+        BossDirectories.resolve("plugins"),
+        DevPluginArtifacts.stagingRoot(),
     )
+
+/**
+ * [candidate] when it canonically lives under the managed plugin roots, else
+ * null. Persisted jar paths are installed.json input — attacker-shaped rows
+ * must not redirect a reload at an outside jar — so a refusal is reported
+ * through [onRefused] rather than silently dropped.
+ */
+internal fun confinedPersistedJarPath(
+    candidate: String?,
+    onRefused: (String) -> Unit = {},
+): String? {
+    val confined = candidate?.takeIf { isContainedPath(it, managedPluginJarRoots()) }
+    if (candidate != null && confined == null) {
+        onRefused(candidate)
+    }
+    return confined
+}
 
 /**
  * The best jar in [dir] whose manifest pluginId matches [pluginId], or null.

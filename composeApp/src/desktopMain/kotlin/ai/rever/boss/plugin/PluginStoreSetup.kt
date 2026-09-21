@@ -1824,7 +1824,6 @@ object PluginStoreSetup {
                 val fallbackResult =
                     attemptStoreFallbackOnDevFailure(
                         dynamicPluginManager = dynamicPluginManager,
-                        pluginId = pluginId,
                         entry = entry,
                         attemptedPath = attemptedPath,
                         allowedRoots = allowedRoots,
@@ -1844,7 +1843,6 @@ object PluginStoreSetup {
 
     private suspend fun attemptStoreFallbackOnDevFailure(
         dynamicPluginManager: DynamicPluginManager,
-        pluginId: String,
         entry: PluginPersistence.InstalledPluginEntry,
         attemptedPath: String?,
         allowedRoots: List<File>,
@@ -1864,7 +1862,7 @@ object PluginStoreSetup {
                 logger.warn(
                     LogCategory.SYSTEM,
                     "Refusing dev-fallback store JAR outside the managed roots",
-                    mapOf("pluginId" to pluginId, "jarPath" to entry.jarPath),
+                    mapOf("pluginId" to entry.pluginId, "jarPath" to entry.jarPath),
                 )
             }
             return null
@@ -1874,7 +1872,7 @@ object PluginStoreSetup {
             LogCategory.SYSTEM,
             "Dev plugin failed to load at startup; falling back to store build",
             mapOf(
-                "pluginId" to pluginId,
+                "pluginId" to entry.pluginId,
                 "devJarPath" to attemptedPath,
                 "storeJarPath" to entry.jarPath,
                 "error" to (devError?.message ?: "unknown"),
@@ -1886,14 +1884,14 @@ object PluginStoreSetup {
         if (fallbackResult.isSuccess) {
             logger.info(
                 LogCategory.SYSTEM,
-                "Successfully fell back to store build for plugin $pluginId",
-                mapOf("pluginId" to pluginId, "storeJarPath" to entry.jarPath),
+                "Successfully fell back to store build for plugin ${entry.pluginId}",
+                mapOf("pluginId" to entry.pluginId, "storeJarPath" to entry.jarPath),
             )
         } else {
             logger.error(
                 LogCategory.SYSTEM,
-                "Fallback to store build also failed for plugin $pluginId",
-                mapOf("pluginId" to pluginId, "storeJarPath" to entry.jarPath),
+                "Fallback to store build also failed for plugin ${entry.pluginId}",
+                mapOf("pluginId" to entry.pluginId, "storeJarPath" to entry.jarPath),
                 fallbackResult.exceptionOrNull(),
             )
         }
