@@ -51,16 +51,6 @@ class LocalPluginRepository(
             !Files.isSymbolicLink(pluginDirectory.toPath()) &&
                 Files.isDirectory(pluginDirectory.toPath(), LinkOption.NOFOLLOW_LINKS)
 
-    /**
-     * The JARs directly inside [pluginDirectory] that are safe to scan:
-     * plain regular files whose real path stays inside the directory's own
-     * real path. Symlinked or escaping entries are skipped, not followed.
-     */
-    private fun managedJars(): List<File> =
-        ManagedDirectories.listContainedRegularFiles(pluginDirectory) { file ->
-            file.extension == "jar"
-        }
-
     override suspend fun listPlugins(): Result<List<PluginInfo>> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -75,7 +65,8 @@ class LocalPluginRepository(
                     return@runCatching emptyList()
                 }
 
-                val plugins = managedJars().mapNotNull { jarFile -> readPluginFromJar(jarFile) }
+                val plugins =
+                    managedJars(pluginDirectory).mapNotNull { jarFile -> readPluginFromJar(jarFile) }
 
                 cachedPlugins = plugins
                 logger.info(
@@ -155,7 +146,7 @@ class LocalPluginRepository(
             runCatching {
                 // For local repository, find the JAR and copy it
                 val sourceJar =
-                    managedJars().find { jarFile ->
+                    managedJars(pluginDirectory).find { jarFile ->
                         readPluginId(jarFile) == pluginId
                     } ?: throw PluginNotFoundException(pluginId, id)
 
@@ -275,11 +266,21 @@ class LocalPluginRepository(
      * Get the path for a plugin JAR in this repository.
      */
     fun getJarPath(pluginId: String): String? =
-        managedJars()
+        managedJars(pluginDirectory)
             .find { jarFile ->
                 readPluginId(jarFile) == pluginId
             }?.absolutePath
 }
+
+/**
+ * The JARs directly inside [dir] that are safe to scan: plain regular files
+ * whose real path stays inside the directory's own real path. Symlinked or
+ * escaping entries are skipped, not followed.
+ */
+private fun managedJars(dir: File): List<File> =
+    ManagedDirectories.listContainedRegularFiles(dir) { file ->
+        file.extension == "jar"
+    }
 
 private fun sha256Hex(file: File): String =
     MessageDigest
