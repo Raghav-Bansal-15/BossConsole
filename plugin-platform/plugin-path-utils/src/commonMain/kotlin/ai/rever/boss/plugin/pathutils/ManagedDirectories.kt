@@ -100,18 +100,19 @@ object ManagedDirectories {
                     null
                 }
             }.getOrNull() ?: return emptyList()
-        return dir.listFiles()
+        return dir
+            .listFiles()
             ?.mapNotNull { file ->
-                when {
-                    !accept(file) -> null
-                    isContainedRegularFile(file, realRoot) -> file
-                    else -> {
-                        logger.warning(
-                            "Skipping a managed-directory entry that is not a contained regular file: " +
-                                file.absolutePath,
-                        )
-                        null
-                    }
+                if (!accept(file)) {
+                    null
+                } else if (isContainedRegularFile(file, realRoot)) {
+                    file
+                } else {
+                    logger.warning(
+                        "Skipping a managed-directory entry that is not a contained regular file: " +
+                            file.absolutePath,
+                    )
+                    null
                 }
             }
             ?: emptyList()

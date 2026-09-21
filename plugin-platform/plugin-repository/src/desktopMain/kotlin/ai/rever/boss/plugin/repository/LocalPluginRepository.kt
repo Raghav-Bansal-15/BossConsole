@@ -279,10 +279,10 @@ class LocalPluginRepository(
             .find { jarFile ->
                 readPluginId(jarFile) == pluginId
             }?.absolutePath
-
-    private fun sha256Hex(file: File): String =
-        MessageDigest
-            .getInstance("SHA-256")
-            .digest(file.readBytes())
-            .joinToString("") { "%02x".format(it) }
 }
+
+private fun sha256Hex(file: File): String =
+    MessageDigest
+        .getInstance("SHA-256")
+        .digest(file.readBytes())
+        .joinToString("") { "%02x".format(it) }
