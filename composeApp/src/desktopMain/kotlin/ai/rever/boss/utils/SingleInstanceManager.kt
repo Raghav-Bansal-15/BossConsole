@@ -1087,6 +1087,16 @@ object SingleInstanceManager {
     @Volatile
     private var published: InstanceDescriptor? = null
 
+    /**
+     * Whether this process holds the single-instance claim - it won
+     * [acquireLock] and has not been [release]d. Destructive startup cleanup
+     * (FluckEngine's stale-Chromium sweep) consults this: the sweep matches
+     * processes by shared data-dir paths, so a process that lost - or never
+     * took - the claim must not run it against the owning instance's tree.
+     */
+    val isInstanceOwner: Boolean
+        get() = published != null
+
     /** Runtime directory override for tests; see [SingleInstanceFiles.runtimeDirOverride]. */
     internal var runtimeDirOverride: File?
         get() = SingleInstanceFiles.runtimeDirOverride
