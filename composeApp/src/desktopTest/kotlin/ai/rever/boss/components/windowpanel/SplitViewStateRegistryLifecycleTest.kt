@@ -1,5 +1,11 @@
-package ai.rever.boss.components.window_panel
+// Deliberately not in the registry's own package: `window_panel` has an underscore, which
+// detekt's PackageNaming rule rejects for anything new. `internal` is module-wide, so
+// RegisterSplitViewState is reachable from here regardless.
+package ai.rever.boss.components.windowpanel
 
+import ai.rever.boss.components.window_panel.RegisterSplitViewState
+import ai.rever.boss.components.window_panel.SplitViewState
+import ai.rever.boss.components.window_panel.SplitViewStateRegistry
 import ai.rever.boss.plugin.api.TabRegistry
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,7 +34,9 @@ class SplitViewStateRegistryLifecycleTest {
     // suite registered must not outlive it.
     @AfterTest
     fun cleanup() {
-        SplitViewStateRegistry.getAllStates().keys
+        SplitViewStateRegistry
+            .getAllStates()
+            .keys
             .filter { it.startsWith(WINDOW_PREFIX) }
             .forEach(SplitViewStateRegistry::unregister)
     }
