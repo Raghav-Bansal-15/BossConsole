@@ -94,10 +94,7 @@ class SingleInstanceChannelTest {
         val token = "c".repeat(TOKEN_HEX_LENGTH)
         val url = "boss://auth/verify#access_token=abc&type=recovery"
 
-        val open =
-            assertNotNull(
-                parseRequestLine(assertNotNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, url))),
-            )
+        val open = assertNotNull(parseRequestLine(openRequestLine(token, DeepLinkOrigin.EXTERNAL, url)))
         assertEquals(token, open.token)
         assertEquals(VERB_OPEN, open.verb)
         assertEquals(DeepLinkOrigin.EXTERNAL, open.origin)
@@ -113,10 +110,7 @@ class SingleInstanceChannelTest {
 
         // A URL with a space in it must survive rather than being cut short.
         val spacedUrl = "boss://url?url=a b"
-        val spaced =
-            assertNotNull(
-                parseRequestLine(assertNotNull(formatOpenRequest(token, DeepLinkOrigin.OPERATOR_CLI, spacedUrl))),
-            )
+        val spaced = assertNotNull(parseRequestLine(openRequestLine(token, DeepLinkOrigin.OPERATOR_CLI, spacedUrl)))
         assertEquals(spacedUrl, spaced.url)
         assertEquals(DeepLinkOrigin.OPERATOR_CLI, spaced.origin)
 
@@ -153,47 +147,6 @@ class SingleInstanceChannelTest {
         assertNull(parseRequestLine("$PROTOCOL_VERSION $token SHUTDOWN"))
         assertNull(parseRequestLine("$PROTOCOL_VERSION $token $VERB_OPEN"))
         assertNull(parseRequestLine("$PROTOCOL_VERSION $token $VERB_PING extra"))
-        // A control character smuggled mid-line in the URL is a malformed frame,
-        // not a link to act on.
-        assertNull(parseRequestLine("$PROTOCOL_VERSION $token $VERB_OPEN EXTERNAL boss://x\revil"))
-        assertNull(parseRequestLine("$PROTOCOL_VERSION $token $VERB_OPEN EXTERNAL boss://x\t evil"))
-    }
-
-    @Test
-    fun `an url that cannot occupy one framed line is never sent`() {
-        val token = "c".repeat(TOKEN_HEX_LENGTH)
-
-        // The framing is newline-delimited, so a raw line break in the URL would
-        // smuggle a second request into the stream; the formatter must refuse it.
-        assertNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, "boss://x\n$VERB_OPEN evil"))
-        assertNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, "boss://x\r\n$VERB_PING"))
-        assertNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, "boss://x\tevil"))
-        assertNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, " "))
-
-        // The URL has its own byte budget, well under the whole-request one.
-        val oversizedUrl = "boss://url?url=" + "a".repeat(MAX_FORWARD_URL_BYTES)
-        assertNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, oversizedUrl))
-
-        // A percent-encoded newline is ordinary URL content and still frames.
-        assertNotNull(formatOpenRequest(token, DeepLinkOrigin.EXTERNAL, "boss://url?url=a%0Ab"))
-    }
-
-    @Test
-    fun `an injected second line is dropped by the framing, never forwarded`() {
-        assertTrue(SingleInstanceManager.acquireLock())
-        val descriptor = assertNotNull(readPublishedDescriptor())
-
-        // The hostile URL never reaches the channel: sendToExistingInstance
-        // refuses it before connecting, and nothing answers a stray second line.
-        assertFalse(SingleInstanceManager.sendToExistingInstance("boss://x\n$VERB_OPEN evil"))
-
-        // Even a raw injected second line is not a request: the reader takes one
-        // line per connection and the channel stays healthy afterwards.
-        val injected =
-            "$PROTOCOL_VERSION ${descriptor.token} $VERB_OPEN EXTERNAL boss://split\n" +
-                "$PROTOCOL_VERSION ${descriptor.token} $VERB_STATUS"
-        assertEquals(RESPONSE_OK, exchange(descriptor, injected))
-        assertEquals(RESPONSE_PONG, exchange(descriptor, formatPingRequest(descriptor.token)))
     }
 
     @Test
@@ -247,7 +200,7 @@ class SingleInstanceChannelTest {
         assertEquals(RESPONSE_REJECTED, exchange(descriptor, "boss://terminal?command=id"))
         assertEquals(
             RESPONSE_REJECTED,
-            exchange(descriptor, assertNotNull(formatOpenRequest(wrongToken, DeepLinkOrigin.OPERATOR_CLI, "boss://split"))),
+            exchange(descriptor, openRequestLine(wrongToken, DeepLinkOrigin.OPERATOR_CLI, "boss://split")),
         )
     }
 

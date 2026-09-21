@@ -1551,6 +1551,7 @@ object SingleInstanceManager {
      *   unknown outcome at timeout returns false. This is not a guarantee that
      *   asynchronous work started by a handler has completed.
      */
+    @Suppress("ReturnCount")
     fun sendToExistingInstance(
         url: String,
         origin: DeepLinkOrigin = DeepLinkOrigin.EXTERNAL,
