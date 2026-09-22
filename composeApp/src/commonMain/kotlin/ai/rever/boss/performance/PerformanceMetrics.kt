@@ -91,8 +91,7 @@ data class PerformanceSnapshot(
      * resource counts, memory pools and GC collectors are already bounded and
      * pass through untouched.
      */
-    fun forHistory(): PerformanceSnapshot =
-        copy(cpu = cpu.copy(threads = cpu.threads.take(HISTORY_THREAD_LIMIT)))
+    fun forHistory(): PerformanceSnapshot = copy(cpu = cpu.copy(threads = cpu.threads.take(HISTORY_THREAD_LIMIT)))
 
     companion object {
         /** Threads retained per history entry; the live snapshot carries the full top-20. */
