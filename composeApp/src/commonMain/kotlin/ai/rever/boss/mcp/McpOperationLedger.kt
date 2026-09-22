@@ -248,19 +248,26 @@ class McpOperationLedger(
     @Suppress("TooGenericExceptionCaught") // Audit failure must not change the already-completed tool result.
     private fun writeBatch(batch: List<Any>) {
         val file = ledgerFile ?: return releaseFlushes(batch)
-        val lines = StringBuilder()
-        batch.forEach { item ->
-            if (item is McpOperationRecord) {
-                lines.append(json.encodeToString(item)).append('\n')
-            }
-        }
         try {
-            rotateIfNeeded(file)
             file.parentFile?.mkdirs()
-            createOrRestrictToOwner(file)
-            if (lines.isNotEmpty()) {
-                file.appendText(lines.toString())
+            // One stat per batch: the tracked length stands in for the per-record
+            // exists()+length() checks the old synchronous writer did, so a batch that
+            // crosses the size cap still rotates at the same record boundary it would have.
+            var currentLength = if (file.exists()) file.length() else 0L
+            val pending = StringBuilder()
+            batch.forEach { item ->
+                if (item !is McpOperationRecord) return@forEach
+                val line = json.encodeToString(item) + "\n"
+                if (currentLength >= maxFileSizeBytes) {
+                    appendChunk(file, pending)
+                    pending.setLength(0)
+                    rotateIfNeeded(file)
+                    currentLength = 0
+                }
+                pending.append(line)
+                currentLength += line.toByteArray(Charsets.UTF_8).size
             }
+            appendChunk(file, pending)
         } catch (t: Exception) {
             logger.warn(
                 LogCategory.SYSTEM,
@@ -270,6 +277,15 @@ class McpOperationLedger(
         } finally {
             releaseFlushes(batch)
         }
+    }
+
+    private fun appendChunk(
+        file: File,
+        pending: StringBuilder,
+    ) {
+        if (pending.isEmpty()) return
+        createOrRestrictToOwner(file)
+        file.appendText(pending.toString())
     }
 
     private fun releaseFlushes(batch: List<Any>) {
