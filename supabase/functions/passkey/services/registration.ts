@@ -64,7 +64,9 @@ export const generateRegistrationChallenge = withErrorHandler(
     if (!storeResult.success) {
       return {
         success: false,
-        error: storeResult.error || 'Failed to store challenge'
+        // The raw database message stays server-side; the client gets a
+        // generic failure with a code it can act on.
+        error: storeResult.code ? `Failed to store challenge (${storeResult.code})` : 'Failed to store challenge'
       }
     }
 

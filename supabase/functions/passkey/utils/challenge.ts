@@ -55,14 +55,16 @@ export async function storeChallenge(
 
     if (error) {
       console.error('Database error storing challenge:', authFailureDetails(error))
-      return { success: false, error: error.message }
+      // `error` is safe for logs (already filtered upstream); `code` is what
+      // callers may surface - Postgres messages must never cross the wire.
+      return { success: false, error: error.message, code: error.code ?? 'unknown' }
     }
 
     console.log('Challenge stored successfully')
     return { success: true, data }
   } catch (error) {
     console.error('Exception storing challenge:', authFailureDetails(error))
-    return { success: false, error: (error as Error).message }
+    return { success: false, error: (error as Error).message, code: 'unknown' }
   }
 }
 

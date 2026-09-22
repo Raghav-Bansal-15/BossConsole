@@ -114,7 +114,7 @@ export const generateAuthChallenge = withErrorHandler(
     })
 
     if (!storeResult.success) {
-      console.error('Failed to store challenge:', storeResult.error)
+      console.error('Failed to store challenge:', authFailureDetails({ code: storeResult.code, message: storeResult.error }))
       // Inert, not a distinguishable failure (review follow-up): a
       // success:false here is reachable only for an enrolled account (we got
       // past the passkey lookup), which inverts the oracle - a prober learns
