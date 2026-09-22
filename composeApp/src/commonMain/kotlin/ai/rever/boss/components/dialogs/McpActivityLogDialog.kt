@@ -298,19 +298,7 @@ private fun McpOperationHeaderRow(
                 ),
     ) {
         // Fixed-width slot so the timestamp column stays aligned whether or not a row expands.
-        Text(
-            text =
-                if (onToggle == null) {
-                    ""
-                } else if (expanded) {
-                    "▾"
-                } else {
-                    "▸"
-                },
-            fontSize = 11.sp,
-            color = colors.textSecondary,
-            modifier = Modifier.width(12.dp),
-        )
+        McpExpandChevron(expandable = onToggle != null, expanded = expanded, colors = colors)
         Text(
             text = timeFormat.format(Date(op.timestamp)),
             fontSize = 11.sp,
@@ -344,6 +332,25 @@ private fun McpOperationHeaderRow(
             color = if (op.isError) colors.alert else colors.signalText,
         )
     }
+}
+
+@Composable
+private fun McpExpandChevron(
+    expandable: Boolean,
+    expanded: Boolean,
+    colors: BossColorScheme,
+) {
+    Text(
+        text =
+            when {
+                !expandable -> ""
+                expanded -> "▾"
+                else -> "▸"
+            },
+        fontSize = 11.sp,
+        color = colors.textSecondary,
+        modifier = Modifier.width(12.dp),
+    )
 }
 
 @Composable
