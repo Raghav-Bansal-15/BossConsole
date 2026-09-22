@@ -483,6 +483,11 @@ class RemotePluginRepository(
                     // Cache the downloaded JAR
                     cacheOrNull("write") { downloadCache.cacheJar(pluginId, downloadInfo.version, File(targetPath)) }
 
+                    // Expire stale entries on the write path - the only production caller
+                    // cleanOldEntries had. The sweep collects outside the cache lock now, so
+                    // running it per download cannot stall other cache operations.
+                    cacheOrNull("expire") { downloadCache.cleanOldEntries() }
+
                     progressFlow.value = 1f
                     onProgress?.invoke(1f)
 
