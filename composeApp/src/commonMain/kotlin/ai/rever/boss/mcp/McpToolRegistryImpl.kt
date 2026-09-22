@@ -973,6 +973,8 @@ internal class McpToolRegistryCore(
                             McpArgumentSanitizer.parseArguments(args.raw),
                             riskAssessment = DefaultMcpRiskEvaluator().evaluateRisk(tool.definition.name, args),
                             declaredReadOnly = tool.definition.readOnly,
+                            toolDescription = tool.definition.description,
+                            policy = policy,
                         )
                 ) {
                     is McpApprovalDecision.Approved -> {
