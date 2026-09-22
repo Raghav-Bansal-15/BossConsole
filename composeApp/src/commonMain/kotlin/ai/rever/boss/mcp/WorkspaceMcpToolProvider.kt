@@ -41,6 +41,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -106,6 +107,11 @@ object WorkspaceMcpToolProvider : McpToolProvider {
 
     /** Timeout in milliseconds when awaiting compose readiness on cold start. */
     internal var splitViewWaitTimeoutMs: Long = 5000L
+
+    // Bounds for list_workspaces' `limit`: a listing is agent context, so it
+    // must never be unbounded.
+    internal const val LIST_WORKSPACES_DEFAULT_LIMIT = 100
+    internal const val LIST_WORKSPACES_MAX_LIMIT = 500
 
     private fun getFileManager(): WorkspaceFileManager = fileManagerProvider?.invoke() ?: WorkspaceFileManager()
 
@@ -199,13 +205,35 @@ object WorkspaceMcpToolProvider : McpToolProvider {
     private fun createListWorkspacesTool(name: String): McpToolDefinition =
         McpToolDefinition(
             name = name,
-            description = "List all existing workspaces, their project paths, and whether they are active or running.",
+            description =
+                "List workspaces as summaries (id, name, project path, active/running state). " +
+                    "Supports limit/offset pagination plus query and activeOnly filters so the " +
+                    "response stays small when many workspaces exist.",
             inputSchema =
                 """
                 {
                     "type": "object",
                     "properties": {
-                        "windowId": { "type": "string", "description": "Optional window ID to query active status against" }
+                        "windowId": {
+                            "type": "string",
+                            "description": "Optional window ID to query active status against"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum summaries to return (default 100, capped at 500)"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Rows to skip, for pagination (default 0)"
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Case-insensitive substring filter over id, name, description, projectPath"
+                        },
+                        "activeOnly": {
+                            "type": "boolean",
+                            "description": "Return only workspaces active or running in a window"
+                        }
                     }
                 }
                 """.trimIndent(),
@@ -331,21 +359,32 @@ object WorkspaceMcpToolProvider : McpToolProvider {
             }
         val activeWorkspaceId = splitViewState?.currentWorkspaceId
 
-        val allWorkspaces = mutableMapOf<String, LayoutWorkspace>()
+        val query = args.string("query")?.lowercase()?.takeIf { it.isNotBlank() }
+        val activeOnly = args.boolean("activeOnly") ?: false
+        val limit = (args.int("limit") ?: LIST_WORKSPACES_DEFAULT_LIMIT).coerceIn(1, LIST_WORKSPACES_MAX_LIMIT)
+        val offset = (args.int("offset") ?: 0).coerceAtLeast(0)
+
+        val allWorkspaces = mutableMapOf<String, WorkspaceSummary>()
 
         // 1. Predefined templates
         PredefinedWorkspaces.allWorkspaces.forEach { ws ->
-            allWorkspaces[ws.id] = ws
+            allWorkspaces[ws.id] = WorkspaceSummary(ws.id, ws.name, ws.description, ws.projectPath)
         }
 
-        // 2. Saved workspaces on disk
+        // 2. Saved workspaces on disk: top-level summary fields only. A full
+        // loadWorkspace per file would deserialize every layout tree on every
+        // poll; the summary read keeps per-row cost flat. Sorted by fileName so
+        // offset/limit pages are stable across calls.
         val fileManager = getFileManager()
         try {
-            val files = fileManager.listWorkspaces()
+            val files = fileManager.listWorkspaces().sortedBy { it.fileName }
             for (fileInfo in files) {
-                val loaded = fileManager.loadWorkspace(fileInfo.fileName)
-                if (loaded != null) {
-                    allWorkspaces[loaded.id] = loaded
+                val summary =
+                    fileManager
+                        .loadDocument(fileInfo.fileName)
+                        ?.let { workspaceSummaryFromJson(fileInfo.fileName, it) }
+                if (summary != null) {
+                    allWorkspaces[summary.id] = summary
                 }
             }
         } catch (
@@ -358,9 +397,17 @@ object WorkspaceMcpToolProvider : McpToolProvider {
         val allStates = SplitViewStateRegistry.getAllStates()
         val runningWorkspaceIds = allStates.values.mapNotNull { it.currentWorkspaceId }.toSet()
 
+        val filtered =
+            allWorkspaces.values.filter { ws ->
+                val isActiveOrRunning = ws.id == activeWorkspaceId || runningWorkspaceIds.contains(ws.id)
+                (!activeOnly || isActiveOrRunning) &&
+                    (query == null || ws.matches(query))
+            }
+        val page = filtered.drop(offset).take(limit)
+
         val jsonArray =
             buildJsonArray {
-                allWorkspaces.values.forEach { ws ->
+                page.forEach { ws ->
                     val isActive = ws.id == activeWorkspaceId
                     val isRunning = runningWorkspaceIds.contains(ws.id)
                     val isTemplate = ws.id in PredefinedWorkspaces.allIds
@@ -390,6 +437,10 @@ object WorkspaceMcpToolProvider : McpToolProvider {
                 if (activeWorkspaceId != null) {
                     put("activeWorkspaceId", activeWorkspaceId)
                 }
+                put("total", filtered.size)
+                put("count", page.size)
+                put("offset", offset)
+                put("limit", limit)
                 put("workspaces", jsonArray)
             }
 
@@ -1159,3 +1210,45 @@ internal fun SplitConfig.hasInitialCommands(): Boolean =
         is SplitConfig.VerticalSplit -> left.hasInitialCommands() || right.hasInitialCommands()
         is SplitConfig.HorizontalSplit -> top.hasInitialCommands() || bottom.hasInitialCommands()
     }
+
+/**
+ * The per-row fields `list_workspaces` reports, without the layout tree.
+ * A saved Space file is a serialized [LayoutWorkspace]; the listing needs only
+ * its top-level scalars, so it parses those directly rather than deserialize
+ * the whole layout for every file on every call.
+ */
+internal data class WorkspaceSummary(
+    val id: String,
+    val name: String,
+    val description: String,
+    val projectPath: String?,
+) {
+    /** Case-insensitive substring match over the fields the `query` filter covers. */
+    fun matches(query: String): Boolean =
+        id.lowercase().contains(query) ||
+            name.lowercase().contains(query) ||
+            description.lowercase().contains(query) ||
+            projectPath?.lowercase()?.contains(query) == true
+}
+
+/**
+ * Reads [jsonText] (a saved workspace file) into a [WorkspaceSummary], or null when the
+ * file is not a workspace document. The id falls back to [fileName] minus `.json`, which is
+ * the id for files written by `fileNameForId` and the name for legacy name-keyed files.
+ */
+internal fun workspaceSummaryFromJson(
+    fileName: String,
+    jsonText: String,
+): WorkspaceSummary? {
+    val obj =
+        runCatching { Json.parseToJsonElement(jsonText) as? JsonObject }
+            .getOrNull() ?: return null
+    fun field(key: String): String? = (obj[key] as? JsonPrimitive)?.contentOrNull
+    val name = field("name") ?: return null
+    return WorkspaceSummary(
+        id = field("id")?.takeIf { it.isNotBlank() } ?: fileName.removeSuffix(".json"),
+        name = name,
+        description = field("description") ?: "",
+        projectPath = field("projectPath"),
+    )
+}

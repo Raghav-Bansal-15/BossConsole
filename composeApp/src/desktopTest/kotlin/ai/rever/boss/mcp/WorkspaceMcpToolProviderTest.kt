@@ -28,6 +28,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -238,6 +239,76 @@ class WorkspaceMcpToolProviderTest {
             val templateIds = workspaces.map { it.jsonObject["id"]?.jsonPrimitive?.content }
             assertTrue(templateIds.contains(PredefinedWorkspaces.DUAL_TERMINAL_ID))
             assertTrue(templateIds.contains(PredefinedWorkspaces.BROWSER_ONLY_ID))
+        }
+
+    @Test
+    fun `list_workspaces paginates summaries without fully loading each file`() =
+        runBlocking {
+            // A "layout" that cannot deserialize as a SplitConfig: a row only a
+            // summary read can surface. If the handler still ran a full
+            // loadWorkspace per file, every one of these would be dropped.
+            repeat(200) { i ->
+                File(workspaceDir, "bulk-ws-%03d.json".format(i)).writeText(
+                    """{"id":"bulk-ws-$i","name":"Bulk WS $i","description":"d$i",""" +
+                        """"projectPath":"/p/$i","layout":"invalid"}""",
+                )
+            }
+            val core = createTestCore()
+
+            val firstPage =
+                Json
+                    .parseToJsonElement(core.invoke("list_workspaces", """{"limit":20}""").text)
+                    .jsonObject
+            val pageRows = firstPage["workspaces"]!!.jsonArray
+            assertEquals(20, pageRows.size, "limit=20 must cap the response")
+            assertEquals(200 + PredefinedWorkspaces.allWorkspaces.size, firstPage["total"]?.jsonPrimitive?.int)
+            assertEquals(20, firstPage["count"]?.jsonPrimitive?.int)
+
+            val secondPage =
+                Json
+                    .parseToJsonElement(
+                        core.invoke("list_workspaces", """{"limit":20,"offset":20}""").text,
+                    ).jsonObject
+            assertEquals(20, secondPage["workspaces"]!!.jsonArray.size)
+            val firstIds = pageRows.map { it.jsonObject["id"]?.jsonPrimitive?.content }.toSet()
+            val secondIds = secondPage["workspaces"]!!.jsonArray.map { it.jsonObject["id"]?.jsonPrimitive?.content }
+            assertTrue(firstIds.intersect(secondIds.toSet()).isEmpty(), "offset page must not repeat rows")
+
+            // query filters over the summary fields - this row exists only
+            // because the file was summary-parsed, not fully deserialized.
+            val queried =
+                Json
+                    .parseToJsonElement(core.invoke("list_workspaces", """{"query":"bulk ws 42"}""").text)
+                    .jsonObject
+            val hits = queried["workspaces"]!!.jsonArray
+            assertEquals(1, hits.size)
+            assertEquals("bulk-ws-42", hits[0].jsonObject["id"]?.jsonPrimitive?.content)
+            assertEquals("/p/42", hits[0].jsonObject["projectPath"]?.jsonPrimitive?.content)
+        }
+
+    @Test
+    fun `list_workspaces activeOnly keeps only workspaces running in a window`() =
+        runBlocking {
+            File(workspaceDir, "idle-ws.json").writeText(
+                """{"id":"idle-ws","name":"Idle","description":"d","layout":"invalid"}""",
+            )
+            File(workspaceDir, "bulk-active.json").writeText(
+                """{"id":"bulk-active","name":"Active","description":"d","layout":"invalid"}""",
+            )
+            val state = SplitViewState(TabRegistry(), "window-active-1")
+            createdSplitViewStates.add(state)
+            SplitViewStateRegistry.register("window-active-1", state)
+            state.preserveCurrentState("bulk-active")
+
+            val core = createTestCore()
+            val result =
+                Json
+                    .parseToJsonElement(core.invoke("list_workspaces", """{"activeOnly":true}""").text)
+                    .jsonObject
+            val rows = result["workspaces"]!!.jsonArray
+            assertEquals(1, rows.size)
+            assertEquals("bulk-active", rows[0].jsonObject["id"]?.jsonPrimitive?.content)
+            assertTrue(rows[0].jsonObject["isActive"]?.jsonPrimitive?.booleanOrNull == true)
         }
 
     @Test
