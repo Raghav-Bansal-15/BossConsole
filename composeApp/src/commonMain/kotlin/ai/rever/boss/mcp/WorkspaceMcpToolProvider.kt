@@ -342,17 +342,8 @@ object WorkspaceMcpToolProvider : McpToolProvider {
     // Handlers
     // =========================================================================
 
-    @Suppress("LongMethod")
     private suspend fun handleListWorkspaces(args: McpToolArgs): McpToolResult {
-        val windowId = args.string("windowId")
-        val targetWindowId =
-            if (!windowId.isNullOrBlank()) {
-                windowId
-            } else {
-                // Read-only: a listing must not create a window. With exactly one registered
-                // window it is the only possible target; otherwise report none.
-                SplitViewStateRegistry.getAllStates().keys.singleOrNull()
-            }
+        val targetWindowId = resolveListingWindowId(args.string("windowId"))
         val splitViewState =
             targetWindowId?.let {
                 splitViewStateResolver?.invoke(it) ?: SplitViewStateRegistry.getState(it)
@@ -365,68 +356,23 @@ object WorkspaceMcpToolProvider : McpToolProvider {
         val offset = (args.int("offset") ?: 0).coerceAtLeast(0)
 
         val allWorkspaces = mutableMapOf<String, WorkspaceSummary>()
-
-        // 1. Predefined templates
         PredefinedWorkspaces.allWorkspaces.forEach { ws ->
             allWorkspaces[ws.id] = WorkspaceSummary(ws.id, ws.name, ws.description, ws.projectPath)
         }
+        collectSavedSummaries(getFileManager(), allWorkspaces)
 
-        // 2. Saved workspaces on disk: top-level summary fields only. A full
-        // loadWorkspace per file would deserialize every layout tree on every
-        // poll; the summary read keeps per-row cost flat. Sorted by fileName so
-        // offset/limit pages are stable across calls.
-        val fileManager = getFileManager()
-        try {
-            val files = fileManager.listWorkspaces().sortedBy { it.fileName }
-            for (fileInfo in files) {
-                val summary =
-                    fileManager
-                        .loadDocument(fileInfo.fileName)
-                        ?.let { workspaceSummaryFromJson(fileInfo.fileName, it) }
-                if (summary != null) {
-                    allWorkspaces[summary.id] = summary
-                }
-            }
-        } catch (
-            @Suppress("TooGenericExceptionCaught") e: Exception,
-        ) {
-            logger.warn(LogCategory.WORKSPACE, "Error listing workspace files", error = e)
-        }
-
-        // 3. Live workspaces across windows
-        val allStates = SplitViewStateRegistry.getAllStates()
-        val runningWorkspaceIds = allStates.values.mapNotNull { it.currentWorkspaceId }.toSet()
+        val runningWorkspaceIds =
+            SplitViewStateRegistry
+                .getAllStates()
+                .values
+                .mapNotNull { it.currentWorkspaceId }
+                .toSet()
 
         val filtered =
             allWorkspaces.values.filter { ws ->
-                val isActiveOrRunning = ws.id == activeWorkspaceId || runningWorkspaceIds.contains(ws.id)
-                (!activeOnly || isActiveOrRunning) &&
-                    (query == null || ws.matches(query))
+                ws.isListed(query, activeOnly, activeWorkspaceId, runningWorkspaceIds)
             }
         val page = filtered.drop(offset).take(limit)
-
-        val jsonArray =
-            buildJsonArray {
-                page.forEach { ws ->
-                    val isActive = ws.id == activeWorkspaceId
-                    val isRunning = runningWorkspaceIds.contains(ws.id)
-                    val isTemplate = ws.id in PredefinedWorkspaces.allIds
-
-                    add(
-                        buildJsonObject {
-                            put("id", ws.id)
-                            put("name", ws.name)
-                            if (ws.projectPath != null) {
-                                put("projectPath", ws.projectPath)
-                            }
-                            put("description", ws.description)
-                            put("isActive", isActive)
-                            put("isRunning", isRunning)
-                            put("isTemplate", isTemplate)
-                        },
-                    )
-                }
-            }
 
         val response =
             buildJsonObject {
@@ -441,11 +387,83 @@ object WorkspaceMcpToolProvider : McpToolProvider {
                 put("count", page.size)
                 put("offset", offset)
                 put("limit", limit)
-                put("workspaces", jsonArray)
+                put(
+                    "workspaces",
+                    buildJsonArray {
+                        page.forEach { ws ->
+                            add(workspaceRowJson(ws, activeWorkspaceId, runningWorkspaceIds))
+                        }
+                    },
+                )
             }
 
         return McpToolResult(response.toString())
     }
+
+    private fun resolveListingWindowId(windowId: String?): String? =
+        if (!windowId.isNullOrBlank()) {
+            windowId
+        } else {
+            // Read-only: a listing must not create a window. With exactly one registered
+            // window it is the only possible target; otherwise report none.
+            SplitViewStateRegistry.getAllStates().keys.singleOrNull()
+        }
+
+    /**
+     * Merges each saved workspace file into [into] as a [WorkspaceSummary] - top-level
+     * fields only. A full loadWorkspace per file would deserialize every layout tree on
+     * every poll; the summary read keeps per-row cost flat. Sorted by fileName so
+     * offset/limit pages are stable across calls.
+     */
+    private suspend fun collectSavedSummaries(
+        fileManager: WorkspaceFileManager,
+        into: MutableMap<String, WorkspaceSummary>,
+    ) {
+        try {
+            for (fileInfo in fileManager.listWorkspaces().sortedBy { it.fileName }) {
+                val summary =
+                    fileManager
+                        .loadDocument(fileInfo.fileName)
+                        ?.let { workspaceSummaryFromJson(fileInfo.fileName, it) }
+                if (summary != null) {
+                    into[summary.id] = summary
+                }
+            }
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            logger.warn(LogCategory.WORKSPACE, "Error listing workspace files", error = e)
+        }
+    }
+
+    private fun WorkspaceSummary.isListed(
+        query: String?,
+        activeOnly: Boolean,
+        activeWorkspaceId: String?,
+        runningWorkspaceIds: Set<String>,
+    ): Boolean {
+        if (activeOnly && id != activeWorkspaceId && id !in runningWorkspaceIds) {
+            return false
+        }
+        return query == null || matches(query)
+    }
+
+    private fun workspaceRowJson(
+        ws: WorkspaceSummary,
+        activeWorkspaceId: String?,
+        runningWorkspaceIds: Set<String>,
+    ): JsonObject =
+        buildJsonObject {
+            put("id", ws.id)
+            put("name", ws.name)
+            if (ws.projectPath != null) {
+                put("projectPath", ws.projectPath)
+            }
+            put("description", ws.description)
+            put("isActive", ws.id == activeWorkspaceId)
+            put("isRunning", runningWorkspaceIds.contains(ws.id))
+            put("isTemplate", ws.id in PredefinedWorkspaces.allIds)
+        }
 
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
     private suspend fun handleOpenWorkspace(args: McpToolArgs): McpToolResult {
@@ -1240,15 +1258,17 @@ internal fun workspaceSummaryFromJson(
     fileName: String,
     jsonText: String,
 ): WorkspaceSummary? {
-    val obj =
-        runCatching { Json.parseToJsonElement(jsonText) as? JsonObject }
-            .getOrNull() ?: return null
-    fun field(key: String): String? = (obj[key] as? JsonPrimitive)?.contentOrNull
-    val name = field("name") ?: return null
-    return WorkspaceSummary(
-        id = field("id")?.takeIf { it.isNotBlank() } ?: fileName.removeSuffix(".json"),
-        name = name,
-        description = field("description") ?: "",
-        projectPath = field("projectPath"),
-    )
+    val obj = runCatching { Json.parseToJsonElement(jsonText) as? JsonObject }.getOrNull()
+    return obj?.let { json ->
+        (json["name"] as? JsonPrimitive)?.contentOrNull?.let { name ->
+            WorkspaceSummary(
+                id =
+                    (json["id"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                        ?: fileName.removeSuffix(".json"),
+                name = name,
+                description = (json["description"] as? JsonPrimitive)?.contentOrNull ?: "",
+                projectPath = (json["projectPath"] as? JsonPrimitive)?.contentOrNull,
+            )
+        }
+    }
 }
