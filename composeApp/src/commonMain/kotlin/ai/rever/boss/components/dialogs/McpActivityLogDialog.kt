@@ -299,7 +299,14 @@ private fun McpOperationHeaderRow(
     ) {
         // Fixed-width slot so the timestamp column stays aligned whether or not a row expands.
         Text(
-            text = if (onToggle == null) "" else if (expanded) "▾" else "▸",
+            text =
+                if (onToggle == null) {
+                    ""
+                } else if (expanded) {
+                    "▾"
+                } else {
+                    "▸"
+                },
             fontSize = 11.sp,
             color = colors.textSecondary,
             modifier = Modifier.width(12.dp),
