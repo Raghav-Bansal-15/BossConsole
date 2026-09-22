@@ -7,6 +7,9 @@ import java.nio.file.Files
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.system.measureTimeMillis
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -59,6 +62,7 @@ class McpOperationLedgerTest {
                     }
                 }
             writes.forEach { it.get(10, java.util.concurrent.TimeUnit.SECONDS) }
+            assertTrue(ledger.awaitIdle(), "ledger writer never drained")
             val durable = file.readLines().map { Json.decodeFromString<McpOperationRecord>(it).id }
             assertEquals(durable.reversed(), ledger.recentOperations.value.map { it.id })
             assertEquals(80L, ledger.totalCalls.value)
@@ -94,6 +98,7 @@ class McpOperationLedgerTest {
         )
 
         // Verify JSONL on disk
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         val lines = file.readLines()
         assertEquals(1, lines.size)
         val decoded = Json.decodeFromString<McpOperationRecord>(lines.first())
@@ -122,6 +127,7 @@ class McpOperationLedgerTest {
                 ),
         )
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         val lines = file.readLines()
         val decoded = Json.decodeFromString<McpOperationRecord>(lines.first())
         assertEquals("cluster-east", decoded.sanitizedArgs["safe_param"])
@@ -152,6 +158,7 @@ class McpOperationLedgerTest {
                 ),
         )
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         val lines = file.readLines()
         val decoded = Json.decodeFromString<McpOperationRecord>(lines.first())
         val idVal = decoded.sanitizedArgs["id"] ?: ""
@@ -180,6 +187,7 @@ class McpOperationLedgerTest {
                 ),
         )
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         val lines = file.readLines()
         val decoded = Json.decodeFromString<McpOperationRecord>(lines.first())
         assertEquals(longFilePath, decoded.sanitizedArgs["path"], "Long file path must be preserved for audit")
@@ -202,6 +210,7 @@ class McpOperationLedgerTest {
             errorSnippet = "Failed connecting with Bearer secret-token-ey1234567890",
         )
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         val lines = file.readLines()
         val decoded = Json.decodeFromString<McpOperationRecord>(lines.first())
         val errorText = decoded.errorSnippet ?: ""
@@ -227,6 +236,7 @@ class McpOperationLedgerTest {
             )
         }
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         // Backup file .1 should exist
         val backup1 = File(file.parentFile, "${file.name}.1")
         assertTrue(backup1.exists(), "Backup .1 file should exist after rotation")
@@ -282,6 +292,7 @@ class McpOperationLedgerTest {
             rawArgs = mapOf("path" to "/project"),
         )
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         assertTrue(file.isFile, "The first record should have created the ledger file")
         if (posixPermissionsSupported(file)) {
             assertEquals(
@@ -313,6 +324,7 @@ class McpOperationLedgerTest {
             )
         }
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         assertEquals(2, file.readLines().size, "Append semantics: both records must be persisted")
         if (posixPermissionsSupported(file)) {
             assertEquals(
@@ -330,7 +342,8 @@ class McpOperationLedgerTest {
         file.writeText("")
         Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-r--r--"))
 
-        McpOperationLedger(ledgerFile = file).record(
+        val ledger = McpOperationLedger(ledgerFile = file)
+        ledger.record(
             toolName = "git_status",
             providerId = "git",
             policyApplied = McpPolicyAction.ALLOW,
@@ -340,6 +353,7 @@ class McpOperationLedgerTest {
             rawArgs = emptyMap(),
         )
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         assertEquals(
             setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
             Files.getPosixFilePermissions(file.toPath()),
@@ -366,6 +380,7 @@ class McpOperationLedgerTest {
             )
         }
 
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
         val backup1 = File(file.parentFile, "${file.name}.1")
         assertTrue(backup1.exists(), "Backup .1 file should exist after rotation")
         assertTrue(file.isFile, "The active ledger should have been recreated after rotation")
@@ -381,6 +396,66 @@ class McpOperationLedgerTest {
                 "A renamed backup keeps the owner-only mode",
             )
         }
+    }
+
+    private fun recordCall(
+        ledger: McpOperationLedger,
+        name: String,
+    ) {
+        ledger.record(
+            toolName = name,
+            providerId = "provider",
+            policyApplied = McpPolicyAction.ALLOW,
+            approvalDisposition = McpApprovalDisposition.AUTO_ALLOWED,
+            durationMs = 1L,
+            isError = false,
+            rawArgs = emptyMap(),
+        )
+    }
+
+    @Test
+    fun `a burst of records does not serialize callers behind file writes`() {
+        val file = createTempLedgerFile()
+        val ledger = McpOperationLedger(ledgerFile = file)
+        val hold = CountDownLatch(1)
+        // The writer parks on the gate before its first take, so the file is untouched for
+        // the whole burst. A record() that still did its own encode + mkdirs + stat +
+        // appendText could not be held this way, and one that blocked on a busy writer would
+        // sit here for the full 30s.
+        ledger.writeGate = { hold.await(30, TimeUnit.SECONDS) }
+        try {
+            val elapsed = measureTimeMillis { repeat(500) { recordCall(ledger, "tool_$it") } }
+            assertTrue(
+                elapsed < 5_000,
+                "500 records took ${elapsed}ms with the writer parked - callers are behind the file again",
+            )
+        } finally {
+            hold.countDown()
+        }
+
+        // Everything queued eventually lands, in chain order.
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
+        val lines = file.readLines()
+        assertEquals(500, lines.size)
+        assertEquals("tool_499", Json.decodeFromString<McpOperationRecord>(lines.last()).toolName)
+    }
+
+    @Test
+    fun `a flooded writer drops pending records rather than queueing unbounded`() {
+        val file = createTempLedgerFile()
+        val ledger = McpOperationLedger(ledgerFile = file, maxPendingWrites = 4)
+        val hold = CountDownLatch(1)
+        ledger.writeGate = { hold.await(30, TimeUnit.SECONDS) }
+        try {
+            repeat(100) { recordCall(ledger, "flood_$it") }
+        } finally {
+            hold.countDown()
+        }
+
+        // 4 queued, 96 dropped - the pending work stays bounded no matter the burst size.
+        assertEquals(96L, ledger.droppedWriteCount)
+        assertTrue(ledger.awaitIdle(), "ledger writer never drained")
+        assertEquals(4, file.readLines().size)
     }
 
     /**

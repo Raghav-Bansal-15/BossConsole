@@ -791,7 +791,9 @@ internal class McpToolRegistryCore(
                 }
             throw cancelled
         } finally {
-            withContext(NonCancellable + Dispatchers.IO) {
+            // NonCancellable because a cancelled invoke is still an event the audit journal
+            // must capture; no Dispatchers.IO - record() now only enqueues for the writer.
+            withContext(NonCancellable) {
                 ledger.record(
                     toolName = toolName,
                     providerId = tool.providerId,
