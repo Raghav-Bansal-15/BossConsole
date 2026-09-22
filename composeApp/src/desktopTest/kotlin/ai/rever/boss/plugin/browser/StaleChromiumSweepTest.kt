@@ -89,7 +89,9 @@ class StaleChromiumSweepTest {
         assertFalse(
             candidate(
                 command = "/data/b/.boss/boss-chromium/chrome",
-                commandLine = "/data/b/.boss/boss-chromium/chrome --type=renderer --user-data-dir=/data/b/.boss/browser-profile",
+                commandLine =
+                    "/data/b/.boss/boss-chromium/chrome --type=renderer" +
+                        " --user-data-dir=/data/b/.boss/browser-profile",
                 hasForeignOwner = true,
             ),
         )
@@ -110,7 +112,9 @@ class StaleChromiumSweepTest {
         assertTrue(
             candidate(
                 command = "/data/b/.boss/boss-chromium/helpers/chrome_crashpad_handler",
-                commandLine = "/data/b/.boss/boss-chromium/helpers/chrome_crashpad_handler --database=/data/b/.boss/browser-profile/Crashpad",
+                commandLine =
+                    "/data/b/.boss/boss-chromium/helpers/chrome_crashpad_handler" +
+                        " --database=/data/b/.boss/browser-profile/Crashpad",
                 parentPid = 1,
             ),
         )
@@ -176,7 +180,12 @@ class StaleChromiumSweepTest {
         // `echo $!` prints the child's pid, so no child-scan race can leave the
         // test asserting on an empty process list.
         val spawner = ProcessBuilder("/bin/sh", "-c", "sleep 60 & echo $!").start()
-        val orphanPid = spawner.inputStream.bufferedReader().readLine().trim().toLong()
+        val orphanPid =
+            spawner.inputStream
+                .bufferedReader()
+                .readLine()
+                .trim()
+                .toLong()
         spawner.waitFor(5, TimeUnit.SECONDS)
         val orphan =
             ProcessHandle.of(orphanPid).orElseThrow {
