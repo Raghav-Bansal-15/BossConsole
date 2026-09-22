@@ -102,23 +102,46 @@ class TopThreadSamplerTest {
                         allThreadIdsCalls.incrementAndGet()
                         ids
                     }
+
                     method.name == "isThreadCpuTimeSupported" ||
-                        method.name == "isThreadCpuTimeEnabled" -> true
-                    method.name == "getThreadCpuTime" -> (args[0] as Long) * 1_000_000L
+                        method.name == "isThreadCpuTimeEnabled" -> {
+                        true
+                    }
+
+                    method.name == "getThreadCpuTime" -> {
+                        (args[0] as Long) * 1_000_000L
+                    }
+
                     method.name == "getThreadUserTime" -> {
                         userTimeCalls.incrementAndGet()
                         (args[0] as Long) * 1_000L
                     }
+
                     method.name == "getThreadInfo" && args?.get(0) is LongArray -> {
                         val requested = args[0] as LongArray
                         getThreadInfoSizes.add(requested.size)
                         arrayOfNulls<java.lang.management.ThreadInfo>(requested.size)
                     }
-                    method.name == "getThreadCount" -> threadCount
-                    method.name == "equals" -> proxy === args?.get(0)
-                    method.name == "hashCode" -> System.identityHashCode(proxy)
-                    method.name == "toString" -> "FakeThreadMXBean"
-                    else -> defaultValue(method.returnType)
+
+                    method.name == "getThreadCount" -> {
+                        threadCount
+                    }
+
+                    method.name == "equals" -> {
+                        proxy === args?.get(0)
+                    }
+
+                    method.name == "hashCode" -> {
+                        System.identityHashCode(proxy)
+                    }
+
+                    method.name == "toString" -> {
+                        "FakeThreadMXBean"
+                    }
+
+                    else -> {
+                        defaultValue(method.returnType)
+                    }
                 }
             }
         return Proxy.newProxyInstance(
