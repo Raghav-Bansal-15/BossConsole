@@ -2845,7 +2845,7 @@ internal class BrowserHandleImpl(
                     val captureDeferred = CompletableDeferred<PopupCapture?>()
                     pendingPopupCaptures[popupBrowser] = captureDeferred
 
-                    val urlDeferred = CompletableDeferred<String>()
+                    val urlDeferred = CompletableDeferred<String?>()
                     val cleanedUp = AtomicBoolean(false)
                     val urlSubscriptions = mutableListOf<Subscription>()
                     val scope = CoroutineScope(Dispatchers.Default + Job())
@@ -2899,6 +2899,19 @@ internal class BrowserHandleImpl(
                             // had already committed by the time we got here.
                             resolveFromBrowser()
                         }
+
+                        // A popup that dies before naming a destination - a download navigation
+                        // destroys it without ever committing - would otherwise sit in
+                        // pendingPopupCaptures and hold its subscriptions until the URL timeout
+                        // ran out, so a window.open storm pinned one dead Browser per popup for
+                        // the full 3.5s. Completing both waits now lets the coroutine's cleanup
+                        // release the map entry and the subs immediately; the create-target
+                        // fallback still decides whether a tab is owed.
+                        urlSubscriptions +=
+                            popupBrowser.on(BrowserClosed::class.java) {
+                                urlDeferred.complete(null)
+                                captureDeferred.complete(null)
+                            }
                     } catch (e: Exception) {
                         urlSubscriptions.forEach { runCatching { it.unsubscribe() } }
                         pendingPopupCaptures.remove(popupBrowser)
@@ -2989,8 +3002,17 @@ internal class BrowserHandleImpl(
                             }
                             // Lets FluckEngine close this tab again if a download starts right
                             // after it opens - a redirect to a file looks like a page until it
-                            // does not.
-                            FluckEngine.notifyTabOpened()
+                            // does not. Also the burst cap: a window.open storm would otherwise
+                            // adopt every popup into a real tab, so past the cap the tab is
+                            // dropped - the popup browser above is already closed either way.
+                            if (!FluckEngine.notifyTabOpened()) {
+                                logger.debug(
+                                    LogCategory.BROWSER,
+                                    "Popup tab refused, auto-open cap reached",
+                                    mapOf("url" to LogSanitizer.maskUriParams(nav.url)),
+                                )
+                                return@launch
+                            }
 
                             val withDataCb = openInNewTabWithDataCallback
                             if (withDataCb != null) {
