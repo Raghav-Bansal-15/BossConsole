@@ -47,6 +47,13 @@ lane must instead require a pre-existing account or device credential.
    the window ID, and the lane. The assertion header is never in the CORS
    allow-list and is never forwarded back to the client. The edge holds only
    the verification key, so a compromise there cannot mint admissions.
+   The canonical path is the request pathname without query string or
+   fragment, exactly as the platform presents it - for the deployed
+   function that is `/functions/v1/passkey/auth/challenge`,
+   `/functions/v1/passkey/auth/complete`, and so on (the tests mount the
+   routes bare, so their fixtures sign `/auth/challenge`). The signer
+   lives in the gateway repository; a path mismatch is a 403
+   `path_mismatch` on every request, so the two must stay in step.
 4. The edge verifies the assertion before parsing credentials or calling
    `admit_passkey_challenge`. Missing, forged, expired, wrong-lane, and
    body-mismatched assertions return 403 with no database RPC. Requests whose

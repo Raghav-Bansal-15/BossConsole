@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "jsr:@std/assert"
+import { assert, assertEquals, assertExists } from "jsr:@std/assert"
 import { OpenAPIHono } from "@hono/zod-openapi"
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { PasskeyContext } from "../types/context.ts"
@@ -45,12 +45,14 @@ function gatewayTeardown(): void {
 }
 
 const challengeBody = { email: 'person@example.test', sessionId: 'synthetic-session' }
-async function post(app: ReturnType<typeof appFor>, path: string, body: unknown, authorization?: string) {
+async function post(app: ReturnType<typeof appFor>, path: string, body: unknown, authorization?: string,
+  mintOptions: Record<string, unknown> = {}) {
   await gatewaySetup()
   const encoded = JSON.stringify(body)
   const assertion = await mintGatewayAssertion(gatewayPrivateKey!, {
     path: new URL(path, GATEWAY_URL).pathname,
     body: encoded,
+    ...mintOptions,
   })
   const url = path.startsWith("http") ? path : new URL(path, GATEWAY_URL).toString()
   return app.request(url, { method: 'POST', body: encoded, headers: {
@@ -64,6 +66,39 @@ function allowAdmission(client: MockSupabaseClient) {
     data: [{ allowed: true, retry_after_seconds: 0, duplicate: false }], error: null
   }, 'call')
 }
+
+Deno.test('admission carries the verified lane and gateway request id, not caller-controlled values', async () => {
+  try {
+    const client = createMockSupabaseClient()
+    allowAdmission(client)
+    client.mockResponse('rpc.find_user_by_email', { data: [{ id: 'owner', email: challengeBody.email }], error: null }, 'call')
+    client.mockResponse('user_passkeys', { data: [mockPasskey], error: null }, 'select')
+    client.mockResponse('passkey_challenges', { data: [{ id: 'stored' }], error: null }, 'insert')
+    const response = await post(appFor(client), '/auth/challenge', challengeBody)
+    assertEquals(response.status, 200)
+    const admission = client.getQueryHistory().find(query => query.table === 'rpc.admit_passkey_challenge')
+    assertExists(admission)
+    // The lane is the verified gateway lane, not a public header. A missing assertion is untrusted.
+    assertEquals(admission!.params['p_lane'], 'untrusted')
+    assertEquals(admission!.params['p_type'], 'authentication')
+    assert('p_request_id' in admission!.params)
+    // A verified trusted assertion switches the RPC to the trusted lane.
+    const trusted = createMockSupabaseClient()
+    allowAdmission(trusted)
+    trusted.mockResponse('rpc.find_user_by_email', { data: [{ id: 'owner', email: challengeBody.email }], error: null }, 'call')
+    trusted.mockResponse('user_passkeys', { data: [mockPasskey], error: null }, 'select')
+    trusted.mockResponse('passkey_challenges', { data: [{ id: 'stored' }], error: null }, 'insert')
+    const trustedResponse = await post(appFor(trusted), '/auth/challenge', challengeBody, undefined,
+      { lane: 'trusted', requestId: 'request-lane-fidelity' })
+    assertEquals(trustedResponse.status, 200)
+    const trustedAdmission = trusted.getQueryHistory().find(query => query.table === 'rpc.admit_passkey_challenge')
+    assertExists(trustedAdmission)
+    assertEquals(trustedAdmission!.params['p_lane'], 'trusted')
+    assertEquals(trustedAdmission!.params['p_request_id'], 'request-lane-fidelity')
+  } finally {
+    gatewayTeardown()
+  }
+})
 
 Deno.test('challenge refusal runs before account lookup and returns Retry-After', async () => {
   try {

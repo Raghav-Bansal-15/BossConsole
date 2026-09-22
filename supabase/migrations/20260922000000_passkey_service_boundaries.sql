@@ -19,7 +19,9 @@
 --   authenticated keeps read-only access to its own user_passkeys rows and to
 --   the security_invoker active_user_passkeys view;
 --   the SECURITY DEFINER trigger_cleanup_expired_challenges (20260916130000)
---   keeps its self-contained cleanup, which needs no client grants.
+--   keeps its self-contained cleanup, which needs no client grants;
+--   the vestigial FOR ALL service-role policies are restated as per-command
+--   service_role policies (a no-op at runtime, documentation otherwise).
 
 revoke all privileges on table public.user_passkeys, public.active_user_passkeys,
   public.passkey_challenges from public, anon, authenticated;
@@ -51,6 +53,33 @@ drop policy if exists "Users can delete their own passkeys" on public.user_passk
 drop policy if exists "Users can view their own challenges" on public.passkey_challenges;
 drop policy if exists "Allow session-based access for mobile flows" on public.passkey_challenges;
 drop policy if exists "Users can insert their own challenges" on public.passkey_challenges;
+
+-- The original sweep also left the vestigial FOR ALL service-role policies from
+-- 20251023000013. They are no-ops at runtime (service_role bypasses RLS) but a
+-- FOR ALL policy is a standing invitation for the table to be treated as
+-- service-scoped by whatever next touches it; restate the intent the way
+-- 20260910120000 did for plugin_downloads: drop the ALL command, keep the
+-- per-command grants explicit.
+drop policy if exists "Service role can access all passkeys" on public.user_passkeys;
+drop policy if exists "Service role can access all challenges" on public.passkey_challenges;
+
+create policy "user_passkeys service role select" on public.user_passkeys
+  for select to service_role using (true);
+create policy "user_passkeys service role insert" on public.user_passkeys
+  for insert to service_role with check (true);
+create policy "user_passkeys service role update" on public.user_passkeys
+  for update to service_role using (true) with check (true);
+create policy "user_passkeys service role delete" on public.user_passkeys
+  for delete to service_role using (true);
+
+create policy "passkey_challenges service role select" on public.passkey_challenges
+  for select to service_role using (true);
+create policy "passkey_challenges service role insert" on public.passkey_challenges
+  for insert to service_role with check (true);
+create policy "passkey_challenges service role update" on public.passkey_challenges
+  for update to service_role using (true) with check (true);
+create policy "passkey_challenges service role delete" on public.passkey_challenges
+  for delete to service_role using (true);
 
 revoke all privileges on function public.clean_expired_passkey_challenges(),
   public.create_mobile_registration_session(text, text, text) from public, anon, authenticated;

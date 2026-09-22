@@ -34,8 +34,8 @@ cross join (values ('public.find_user_by_email(text)'), ('public.get_session_sta
 
 -- The per-user write policies are dropped; the read policies stay.
 select is((select count(*) from pg_policies
- where tablename = 'user_passkeys' and cmd = 'ALL'), 0::bigint,
- 'no residual all-command policy on user_passkeys');
+ where tablename in ('user_passkeys', 'passkey_challenges') and cmd = 'ALL'),
+ 0::bigint, 'no residual all-command policy on the credential or challenge tables');
 select ok(has_table_privilege('authenticated', 'public.user_passkeys', 'SELECT'),
  'authenticated retains owner-scoped credential reads');
 select ok(has_table_privilege('authenticated', 'public.active_user_passkeys', 'SELECT'),
