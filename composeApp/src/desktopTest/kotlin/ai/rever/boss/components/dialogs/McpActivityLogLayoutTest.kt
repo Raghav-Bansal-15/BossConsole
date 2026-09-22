@@ -25,6 +25,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -144,6 +145,40 @@ class McpActivityLogLayoutTest {
         show(windowSize = IntSize.Zero) { McpActivityLogDialog(emptyList(), 0, 0, onDismiss = {}) }
         closeIsInsideWindow()
         rule.onNodeWithText("Disk persistence is not configured", substring = true).assertExists()
+    }
+
+    @Test fun `a failed call expands to expose its args and full error`() {
+        // The row used to end at a two-line ellipsised error with no way to see what the call
+        // was invoked with - diagnosing a failure meant re-running the tool blind.
+        val error = (1..12).joinToString("\n") { "frame $it at com.example.Tool.run" }
+        val op =
+            McpOperationRecord(
+                id = "op-1",
+                timestamp = 0,
+                toolName = "close_workspace",
+                providerId = "boss-workspace",
+                policyApplied = McpPolicyAction.ASK,
+                approvalDisposition = McpApprovalDisposition.AUTO_ALLOWED,
+                durationMs = 12,
+                isError = true,
+                sanitizedArgs = mapOf("workspaceId" to "ws-42"),
+                errorSnippet = error,
+            )
+        show { McpActivityLogDialog(listOf(op), 1, 1) {} }
+
+        // Collapsed: the detail is not composed at all.
+        rule.onNodeWithTag("mcp-op-detail").assertDoesNotExist()
+        rule.onNodeWithText("workspaceId: ws-42").assertDoesNotExist()
+
+        rule.onNodeWithText("close_workspace").performClick()
+        rule.onNodeWithTag("mcp-op-detail").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("workspaceId: ws-42").assertIsDisplayed()
+        // The detail carries the untruncated error inside its scrollable box.
+        rule.onNodeWithText("frame 12 at com.example.Tool.run", substring = true).assertExists()
+
+        // A second click collapses again.
+        rule.onNodeWithText("close_workspace").performClick()
+        rule.onNodeWithTag("mcp-op-detail").assertDoesNotExist()
     }
 
     @Test fun `narrow window keeps close horizontally inside the viewport`() {
