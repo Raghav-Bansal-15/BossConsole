@@ -172,18 +172,6 @@ actual object PerformanceState {
         )
     }
 
-    actual fun registerDetailedResourceProviders(
-        browserTabs: () -> List<BrowserTabInfo>,
-        terminals: () -> List<TerminalInfo>,
-        editorTabs: () -> List<EditorTabResourceInfo>,
-    ) {
-        PerformanceMonitor.registerDetailedResourceProviders(
-            browserTabs = browserTabs,
-            terminals = terminals,
-            editorTabs = editorTabs,
-        )
-    }
-
     actual fun clearResourceProviders() {
         PerformanceMonitor.clearResourceProviders()
     }
