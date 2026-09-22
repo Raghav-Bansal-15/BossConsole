@@ -303,7 +303,14 @@ class WorkspaceManager {
                         }
                     workspace?.let {
                         // Ensure workspace has an ID
-                        val withId = if (it.id.isEmpty()) it.copy(id = LayoutWorkspace.generateId()) else it
+                        val withId = it.withStableId()
+                        if (withId !== it) {
+                            // A file carrying no id minted a fresh one on EVERY launch, so the
+                            // Space's identity - session-set membership, preserved-state keys -
+                            // never matched across a relaunch. Write the minted id back into the
+                            // file it came from, once, and the next load reads a stable id.
+                            fileManager.saveWorkspace(withId, fileInfo.fileName)
+                        }
                         saved.add(withId)
                         // Remember the file it came from, so a legacy path keeps being this
                         // Space's file. A file already named `<id>.json` records the same answer
@@ -367,7 +374,7 @@ class WorkspaceManager {
                 )
             } else {
                 current.copy(
-                    id = current.id.ifEmpty { LayoutWorkspace.generateId() },
+                    id = current.id.ifBlank { mintWorkspaceId() },
                     // A typed name goes through `uniqueWorkspaceName` too, which it used to
                     // bypass entirely - the one path that could still put two identical rows in
                     // the list. Its own name is never "taken" by itself, so re-saving a Space
@@ -543,7 +550,11 @@ class WorkspaceManager {
      */
     fun importWorkspace(jsonString: String): LayoutWorkspace? =
         try {
-            val workspace = WorkspaceSerializer.deserialize(jsonString)
+            // A hand-written or agent-authored file commonly carries no id. Blank used to save
+            // as the literal file ".json", which every id-less import then shared - the second
+            // destroyed the first. The minted id is written back with the Space below, so it
+            // stays stable across launches instead of being re-minted on every load.
+            val workspace = WorkspaceSerializer.deserialize(jsonString).withStableId()
 
             // Save the imported workspace to disk
             scope.launch {
@@ -578,9 +589,12 @@ class WorkspaceManager {
      * in the picker for this session. [importWorkspace] would double-write the file.
      */
     fun registerWorkspace(workspace: LayoutWorkspace) {
+        // Same door as import: an id registered blank would key this list under "" and later
+        // save as ".json". Mint before the workspace enters the list.
+        val registered = workspace.withStableId()
         val workspaces = _workspaces.value.toMutableList()
-        val existingIndex = workspaces.indexOfFirst { it.id == workspace.id }
-        if (existingIndex >= 0) workspaces[existingIndex] = workspace else workspaces.add(workspace)
+        val existingIndex = workspaces.indexOfFirst { it.id == registered.id }
+        if (existingIndex >= 0) workspaces[existingIndex] = registered else workspaces.add(registered)
         _workspaces.value = workspaces
     }
 
