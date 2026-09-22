@@ -775,21 +775,27 @@ internal class McpToolRegistryCore(
             aliases[toolName]?.let { providerId to it }
         }
 
+    /**
+     * Resolve an invoked name to its exposed tool: a direct registered-name
+     * match wins; on a miss, a registered alias resolves to its canonical tool
+     * in the same provider. Aliases only resolve through [tools], so the
+     * canonical's disabled and permission state decides, never the alias's own.
+     */
+    private fun findInvocableTool(toolName: String): RegisteredMcpTool? =
+        _tools.value.firstOrNull { it.definition.name == toolName }
+            ?: resolveAlias(toolName)?.let { (providerId, canonicalName) ->
+                _tools.value.firstOrNull {
+                    it.providerId == providerId && it.definition.name == canonicalName
+                }
+            }
+
     @Suppress("LongMethod") // Keep authorization and execution inside the same cancellation audit boundary.
     suspend fun invoke(
         toolName: String,
         arguments: String,
     ): McpToolResult {
-        // A registered tool wins over an alias of the same name (direct lookup
-        // first); an alias resolves to its canonical definition, so the
-        // canonical's disabled/permission state decides, never the alias name's.
         val tool =
-            _tools.value.firstOrNull { it.definition.name == toolName }
-                ?: resolveAlias(toolName)?.let { (providerId, canonicalName) ->
-                    _tools.value.firstOrNull {
-                        it.providerId == providerId && it.definition.name == canonicalName
-                    }
-                }
+            findInvocableTool(toolName)
                 ?: return McpToolResult("Unknown or disabled MCP tool: $toolName", isError = true)
         val args = parseArgs(arguments)
         // Policy is consulted under the canonical name: an alias must inherit the
