@@ -200,7 +200,7 @@ class FileSystemServiceImpl internal constructor(
                     .withDescription(failure.message ?: "Invalid argument")
                     .asRuntimeException()
             } catch (failure: IOException) {
-                throw fileStatus(failure, "Delete", request.path)
+                throw fileStatus(failure, "Delete", request.path, request.recursive)
             }
             Empty.getDefaultInstance()
         }
@@ -331,6 +331,7 @@ private fun fileStatus(
     failure: IOException,
     operation: String,
     path: String,
+    recursive: Boolean = false,
 ): StatusException {
     val code =
         when (failure) {
@@ -347,7 +348,13 @@ private fun fileStatus(
             }
 
             failure is DirectoryNotEmptyException && operation == "Delete" -> {
-                "Cannot delete non-empty directory without recursive=true: $path"
+                if (recursive) {
+                    // The request already was recursive; a file landed in the emptied
+                    // level during the walk, so the hint would be wrong.
+                    "Cannot delete non-empty directory: $path"
+                } else {
+                    "Cannot delete non-empty directory without recursive=true: $path"
+                }
             }
 
             failure is AccessDeniedException -> {
