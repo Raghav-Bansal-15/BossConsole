@@ -3,6 +3,7 @@ package ai.rever.boss.service.filesystem
 import ai.rever.boss.ipc.auth.ProcessAuthority
 import ai.rever.boss.ipc.proto.services.CreateFileRequest
 import ai.rever.boss.ipc.proto.services.DeleteFileRequest
+import ai.rever.boss.ipc.proto.services.FileChangeEvent
 import ai.rever.boss.ipc.proto.services.FileSystemServiceGrpcKt
 import ai.rever.boss.ipc.proto.services.ReadFileRequest
 import ai.rever.boss.ipc.proto.services.RenameFileRequest
@@ -11,11 +12,15 @@ import ai.rever.boss.ipc.proto.services.WatchFileChangesRequest
 import ai.rever.boss.ipc.proto.services.WriteFileRequest
 import com.google.protobuf.ByteString
 import io.grpc.StatusException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.io.File
 import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -387,42 +392,40 @@ class FileAuthorityTest {
             val renamed = watched.resolve("renamed")
             val windows = System.getProperty("os.name").startsWith("Windows")
             val expected = (if (windows) original else renamed).resolve("nested/after-rename")
-            withTimeout(10_000) {
-                val event =
-                    async {
-                        service
-                            .watchFileChanges(
-                                WatchFileChangesRequest
-                                    .newBuilder()
-                                    .setPath(watched.toString())
-                                    .setRecursive(true)
-                                    .build(),
-                            ).first { it.path == expected.toString() }
-                    }
-                delay(500)
+            val events = Channel<FileChangeEvent>(Channel.UNLIMITED)
+            val collector =
+                async {
+                    service
+                        .watchFileChanges(
+                            WatchFileChangesRequest
+                                .newBuilder()
+                                .setPath(watched.toString())
+                                .setRecursive(true)
+                                .build(),
+                        ).collect { events.send(it) }
+                }
+            try {
                 if (windows) {
-                    // NTFS refuses this rename while descendant notification handles are open.
-                    // Registration reaches the server asynchronously over the transport, so wait
-                    // until the refusal proves the handles are held; a move that lands before
-                    // that is moved back and retried rather than mistaken for a real rename.
-                    withTimeout(30_000) {
-                        var refused = false
-                        while (!refused) {
-                            try {
-                                Files.move(original, renamed)
-                                Files.move(renamed, original)
-                                delay(100)
-                            } catch (_: AccessDeniedException) {
-                                refused = true
-                            }
-                        }
-                    }
+                    // NTFS proves the descendant handles are held by refusing the rename.
+                    waitUntilDescendantHandlesHeld(original, renamed)
                 } else {
+                    // Wait for real readiness: the probe is delivered only once the recursive
+                    // scan is live, so the rename cannot race ahead of the watcher.
+                    waitForWatchReadiness(events, watched)
                     Files.move(original, renamed)
                 }
-                delay(750)
-                Files.writeString(expected, "still watched")
-                assertEquals(expected.toString(), event.await().path)
+                // The registry rebinds the renamed subtree on its next poll, which is not
+                // signalled; tick the write until it is delivered under the current name.
+                val delivered = awaitDeliveryUnder(events, expected)
+                assertTrue(delivered, "the write under the current name was never delivered")
+                // Once delivery under the current name has been observed, the rebind is
+                // complete: anything still reported under the pre-rename descendant path is
+                // the defect this test exists to catch. (The rename's own event can only be
+                // emitted in the same poll batch as the rebind, before this point.)
+                val oldBase = watched.resolve(if (windows) "renamed" else "original").resolve("nested")
+                assertFalse(reportsStalePath(events, oldBase), "events under the pre-rename path")
+            } finally {
+                collector.cancelAndJoin()
             }
             if (windows) {
                 // The cancelled watch releases its server-side handles asynchronously; the
@@ -438,9 +441,114 @@ class FileAuthorityTest {
                         }
                     }
                 }
-                assertEquals("still watched", Files.readString(renamed.resolve("nested/after-rename")))
+                assertTrue(
+                    Files.readString(renamed.resolve("nested/after-rename")).startsWith("still watched-"),
+                )
             }
         }
+
+    /**
+     * NTFS refuses this rename while descendant notification handles are open.
+     * Registration reaches the server asynchronously over the transport, so retry
+     * until the refusal proves the handles are held. A forward move that lands first
+     * is moved back before retrying, and the move-back is retried on its own: while
+     * the handles are held it too can be refused, and a lost race here must read as
+     * fixture drift, never as a watch defect. Either exit leaves the fixture at
+     * `original`.
+     */
+    private suspend fun waitUntilDescendantHandlesHeld(
+        original: Path,
+        renamed: Path,
+    ) {
+        withTimeout(30_000) {
+            var refused = false
+            while (!refused) {
+                try {
+                    Files.move(original, renamed)
+                    var restored = false
+                    while (!restored) {
+                        try {
+                            Files.move(renamed, original)
+                            restored = true
+                        } catch (_: AccessDeniedException) {
+                            delay(100)
+                        }
+                    }
+                    delay(100)
+                } catch (_: AccessDeniedException) {
+                    refused = true
+                }
+            }
+        }
+    }
+
+    /**
+     * The snapshot watcher baselines at registration time, so a write that lands
+     * before the baseline is invisible. The probe is therefore ticked with fresh
+     * content until it is delivered, however late the registration lands.
+     */
+    private suspend fun waitForWatchReadiness(
+        events: Channel<FileChangeEvent>,
+        watched: Path,
+    ) {
+        val probe = watched.resolve("probe")
+        var tick = 0L
+        val deadline = System.currentTimeMillis() + 30_000
+        var probeSeen = false
+        while (!probeSeen && System.currentTimeMillis() < deadline) {
+            tick++
+            Files.writeString(probe, "ready-$tick")
+            try {
+                val event = withTimeout(250) { events.receive() }
+                if (event.path == probe.toString()) probeSeen = true
+            } catch (_: TimeoutCancellationException) {
+                // No event this cycle; tick again.
+            }
+        }
+        assertTrue(probeSeen, "the probe write was never delivered by the watch")
+        Files.delete(probe)
+    }
+
+    /** Ticks a write under [target] with fresh content until the watch delivers it. */
+    private suspend fun awaitDeliveryUnder(
+        events: Channel<FileChangeEvent>,
+        target: Path,
+    ): Boolean {
+        var tick = 0L
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline) {
+            tick++
+            Files.writeString(target, "still watched-$tick")
+            try {
+                val event = withTimeout(250) { events.receive() }
+                if (event.path == target.toString()) return true
+            } catch (_: TimeoutCancellationException) {
+                // No event this cycle; tick again.
+            }
+        }
+        return false
+    }
+
+    /** True when an event still carries the pre-rename descendant path inside the window. */
+    private suspend fun reportsStalePath(
+        events: Channel<FileChangeEvent>,
+        oldBase: Path,
+    ): Boolean {
+        val deadline = System.currentTimeMillis() + 500
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val event = withTimeout(50) { events.receive() }
+                if (event.path == oldBase.toString() ||
+                    event.path.startsWith(oldBase.toString() + File.separator)
+                ) {
+                    return true
+                }
+            } catch (_: TimeoutCancellationException) {
+                // Observation window elapsed without a stale event.
+            }
+        }
+        return false
+    }
 
     @Test
     fun `dangling links to allowed targets retain normal write behavior`() =

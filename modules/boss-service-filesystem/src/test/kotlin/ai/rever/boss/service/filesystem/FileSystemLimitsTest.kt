@@ -312,6 +312,10 @@ class FileSystemLimitsTest {
     @Test
     fun `watch emits real changes and releases its slot after collection`() =
         runBlocking {
+            // Capture the process-wide baseline up front: cancellation reaches the server
+            // asynchronously, so wait for these slots back before the next suite in the same
+            // JVM starts counting on them.
+            val streamsBefore = WatchResources.streams.availablePermits()
             repeat(34) { iteration ->
                 withTimeout(10_000) {
                     val received =
@@ -326,6 +330,9 @@ class FileSystemLimitsTest {
                     }
                     assertTrue(received.await().path.startsWith(root.toString()))
                 }
+            }
+            withTimeout(30_000) {
+                while (WatchResources.streams.availablePermits() != streamsBefore) delay(10)
             }
         }
 

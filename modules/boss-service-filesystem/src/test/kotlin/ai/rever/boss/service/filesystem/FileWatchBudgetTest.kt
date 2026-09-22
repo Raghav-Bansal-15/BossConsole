@@ -32,6 +32,12 @@ class FileWatchBudgetTest {
         directories: Int,
     ) = runBlocking {
         val root = Files.createTempDirectory("shared-watches-").toRealPath()
+        // Permit counts are process-wide, so every assertion uses a delta captured here
+        // rather than an absolute total: another suite in the same JVM may still be
+        // releasing asynchronously cancelled watches.
+        val streamsBefore = WatchResources.streams.availablePermits()
+        val directoriesBefore = WatchResources.directories.availablePermits()
+        val fullDirectoryCount = directoriesBefore - streams * directories
         try {
             AuthenticatedFileService(FileSystemServiceImpl()).use { transport ->
                 val service =
@@ -44,7 +50,7 @@ class FileWatchBudgetTest {
                             jobs += launch { service.watchFileChanges(request(path)).collect() }
                         }
                         withTimeout(30_000) {
-                            while (WatchResources.directories.availablePermits() != 128 - streams * directories) {
+                            while (WatchResources.directories.availablePermits() != fullDirectoryCount) {
                                 delay(10)
                             }
                         }
@@ -54,10 +60,24 @@ class FileWatchBudgetTest {
                             }
                         assertEquals(Status.Code.RESOURCE_EXHAUSTED, refused.status.code)
                         jobs.removeAt(0).cancelAndJoin()
+                        // Client cancellation reaches the server asynchronously; wait for the
+                        // cancelled stream's permits to be released before the replacement can
+                        // register, or it is refused with RESOURCE_EXHAUSTED inside the
+                        // supervisorScope launch (silently) and the wait below times out
+                        // without naming the cause.
+                        withTimeout(30_000) {
+                            while (
+                                WatchResources.streams.availablePermits() != streamsBefore - streams + 1 ||
+                                WatchResources.directories.availablePermits() !=
+                                directoriesBefore - (streams - 1) * directories
+                            ) {
+                                delay(10)
+                            }
+                        }
                         val replacement = tree(root.resolve("replacement"), directories)
                         jobs += launch { service.watchFileChanges(request(replacement)).collect() }
                         withTimeout(30_000) {
-                            while (WatchResources.directories.availablePermits() != 128 - streams * directories) {
+                            while (WatchResources.directories.availablePermits() != fullDirectoryCount) {
                                 delay(10)
                             }
                         }
@@ -67,10 +87,10 @@ class FileWatchBudgetTest {
                 }
                 // Client cancellation reaches the server asynchronously; wait for the release.
                 withTimeout(30_000) {
-                    while (WatchResources.streams.availablePermits() != 8) delay(10)
+                    while (WatchResources.streams.availablePermits() != streamsBefore) delay(10)
                 }
-                assertEquals(8, WatchResources.streams.availablePermits())
-                assertEquals(128, WatchResources.directories.availablePermits())
+                assertEquals(streamsBefore, WatchResources.streams.availablePermits())
+                assertEquals(directoriesBefore, WatchResources.directories.availablePermits())
             }
         } finally {
             root.toFile().deleteRecursively()
@@ -81,6 +101,8 @@ class FileWatchBudgetTest {
     fun `partial recursive registration failure releases all handles and permits`() =
         runBlocking {
             val root = Files.createTempDirectory("watch-registration-failure-").toRealPath()
+            val streamsBefore = WatchResources.streams.availablePermits()
+            val directoriesBefore = WatchResources.directories.availablePermits()
             try {
                 AuthenticatedFileService(FileSystemServiceImpl()).use { transport ->
                     val service =
@@ -91,8 +113,8 @@ class FileWatchBudgetTest {
                             withTimeout(30_000) { service.watchFileChanges(request(path)).first() }
                         }
                     assertEquals(Status.Code.RESOURCE_EXHAUSTED, refused.status.code)
-                    assertEquals(8, WatchResources.streams.availablePermits())
-                    assertEquals(128, WatchResources.directories.availablePermits())
+                    assertEquals(streamsBefore, WatchResources.streams.availablePermits())
+                    assertEquals(directoriesBefore, WatchResources.directories.availablePermits())
                 }
             } finally {
                 root.toFile().deleteRecursively()

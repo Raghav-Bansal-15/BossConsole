@@ -72,7 +72,7 @@ class FileSystemCrossVolumeTest {
             listOfNotNull(
                 System.getenv("BOSS_TEST_SECOND_VOLUME"),
                 System.getenv("GITHUB_WORKSPACE"),
-                System.getProperty("user.home"),
+                System.getProperty("java.io.tmpdir"),
                 "/dev/shm",
             ).map(Path::of)
         return candidates.firstOrNull {

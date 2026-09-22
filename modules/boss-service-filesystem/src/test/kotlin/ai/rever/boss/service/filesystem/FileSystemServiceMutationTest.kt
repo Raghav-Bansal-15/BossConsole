@@ -238,6 +238,45 @@ class FileSystemServiceMutationTest {
         assertFalse(directory.exists())
     }
 
+    @Test
+    fun `recursive delete skips a concurrently removed descendant instead of reporting success over a partial tree`() {
+        // The seam removes the nested file at the moment the recursive walk is about to
+        // inspect it: enumeration listed it, then a concurrent actor (an editor atomic save,
+        // a build tool) took it away. The RPC must still remove the rest of the tree and
+        // report success only when nothing is left, never success over a partially
+        // removed tree.
+        val directory = testDirectory.resolve("mid-walk-deleted").apply { mkdir() }
+        val nestedDirectory = directory.resolve("nested").apply { mkdir() }
+        val vanished = nestedDirectory.resolve("child.txt").apply { createNewFile() }
+        val survivor = directory.resolve("survivor.txt").apply { createNewFile() }
+
+        val seamAccess = FileAccess(FileSystemPathPolicy())
+        val seamService =
+            FileSystemServiceImpl(seamAccess) { path ->
+                if (path == vanished.toPath()) vanished.delete()
+            }
+        val seamTransport = AuthenticatedFileService(seamService)
+        try {
+            val seamStub =
+                AuthenticatedFileService.stub(seamTransport.channelFor("mid-walk-host", ProcessAuthority.HOST))
+            runBlocking {
+                seamStub.deleteFile(
+                    DeleteFileRequest
+                        .newBuilder()
+                        .setPath(directory.absolutePath)
+                        .setRecursive(true)
+                        .build(),
+                )
+            }
+        } finally {
+            seamTransport.close()
+        }
+
+        assertFalse(directory.exists(), "the tree must be fully removed, not partially left behind")
+        assertFalse(survivor.exists())
+        assertFalse(vanished.exists())
+    }
+
     private fun createFile(file: File) {
         runBlocking {
             service.createFile(

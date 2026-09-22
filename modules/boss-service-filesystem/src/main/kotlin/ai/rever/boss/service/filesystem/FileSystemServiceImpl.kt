@@ -34,6 +34,7 @@ import kotlin.coroutines.CoroutineContext
  */
 class FileSystemServiceImpl internal constructor(
     private val access: FileAccess,
+    private val beforeDescendantInfo: (Path) -> Unit = {},
 ) : FileSystemServiceGrpcKt.FileSystemServiceCoroutineImplBase() {
     constructor() : this(FileAccess())
 
@@ -154,6 +155,9 @@ class FileSystemServiceImpl internal constructor(
             }
         }
 
+    // Native validation failures re-throw as a wire-safe status; the message only feeds
+    // the description, so nothing is lost by catching them separately.
+    @Suppress("SwallowedException")
     override suspend fun createFile(request: CreateFileRequest): Empty =
         withContext(Dispatchers.IO) {
             IpcCall.requireHost()
@@ -166,12 +170,19 @@ class FileSystemServiceImpl internal constructor(
                         entry.parent.file(entry.name, create = true, permissions = CreationPermissions.INHERIT).close()
                     }
                 }
+            } catch (failure: IllegalArgumentException) {
+                throw Status.INVALID_ARGUMENT
+                    .withDescription(failure.message ?: "Invalid argument")
+                    .asRuntimeException()
             } catch (failure: IOException) {
                 throw fileStatus(failure, "Create", request.path)
             }
             Empty.getDefaultInstance()
         }
 
+    // Native validation failures re-throw as a wire-safe status; the message only feeds
+    // the description, so nothing is lost by catching them separately.
+    @Suppress("SwallowedException")
     override suspend fun deleteFile(request: DeleteFileRequest): Empty =
         withContext(Dispatchers.IO) {
             IpcCall.requireHost()
@@ -184,6 +195,10 @@ class FileSystemServiceImpl internal constructor(
                 }
             } catch (_: NoSuchFileException) {
                 // Missing deletes remain idempotent, including a missing parent.
+            } catch (failure: IllegalArgumentException) {
+                throw Status.INVALID_ARGUMENT
+                    .withDescription(failure.message ?: "Invalid argument")
+                    .asRuntimeException()
             } catch (failure: IOException) {
                 throw fileStatus(failure, "Delete", request.path)
             }
@@ -198,9 +213,26 @@ class FileSystemServiceImpl internal constructor(
         depth: Int = 0,
     ) {
         work.context.ensureActive()
+        // Deletes one enumerated descendant, tolerating a concurrent removal that lands
+        // between the enumeration and its info. Unwinding the whole tree on such a race
+        // would report success over a partially removed directory.
+
+        fun deleteDescendant(
+            child: NativeDirectory,
+            descendant: String,
+            childPath: Path,
+            childDepth: Int,
+        ) {
+            try {
+                delete(child, descendant, childPath, work, childDepth + 1)
+            } catch (_: NoSuchFileException) {
+                // Vanished concurrently; treat as already gone and keep walking.
+            }
+        }
         enforceFileSystemLimit(depth <= FileSystemLimits.SCAN_DEPTH, "Recursive delete depth limit reached")
         enforceFileSystemLimit(++work.visited <= FileSystemLimits.SCAN_ENTRIES, "Recursive delete work limit reached")
         access.policy.authorize(path)
+        beforeDescendantInfo(path)
         val info = parent.info(name) ?: throw NoSuchFileException(path.toString())
         val directory = info.isDirectory && !info.isLink
         if (work.recursive && directory) {
@@ -214,7 +246,7 @@ class FileSystemServiceImpl internal constructor(
                         false
                     }
                     val descendant = next ?: break
-                    delete(child, descendant, path.resolve(descendant), work, depth + 1)
+                    deleteDescendant(child, descendant, path.resolve(descendant), depth)
                 }
             }
         }
@@ -222,6 +254,9 @@ class FileSystemServiceImpl internal constructor(
         parent.delete(name, directory)
     }
 
+    // Native validation failures re-throw as a wire-safe status; the message only feeds
+    // the description, so nothing is lost by catching them separately.
+    @Suppress("SwallowedException")
     override suspend fun renameFile(request: RenameFileRequest): Empty =
         withContext(Dispatchers.IO) {
             IpcCall.requireHost()
@@ -239,6 +274,10 @@ class FileSystemServiceImpl internal constructor(
                         }
                     }
                 }
+            } catch (failure: IllegalArgumentException) {
+                throw Status.INVALID_ARGUMENT
+                    .withDescription(failure.message ?: "Invalid argument")
+                    .asRuntimeException()
             } catch (failure: FileAlreadyExistsException) {
                 throw fileStatus(failure, "Rename", request.destinationPath)
             } catch (failure: IOException) {

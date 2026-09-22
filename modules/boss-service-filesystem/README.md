@@ -7,7 +7,10 @@ This is an application boundary, not a same-user OS sandbox.
 
 Recursive watches retain authorized descendant handles until the collector closes.
 On Linux and macOS, registrations follow renamed directories and update their visible
-paths. On Windows, NTFS can refuse a parent directory rename while descendant
+paths; renaming a descendant rebinds the watch to its new location. Renaming the
+watched root itself ends the stream by normal completion: the root is the path the
+caller named, so a new name requires a new registration. On Windows, NTFS can refuse
+a parent directory rename while descendant
 notification handles are open. Stop the affected watch before renaming and reconnect
 it afterward; a refused rename does not stop the existing watch or modify files.
 Cancellation closes the handles and permits the rename again.
