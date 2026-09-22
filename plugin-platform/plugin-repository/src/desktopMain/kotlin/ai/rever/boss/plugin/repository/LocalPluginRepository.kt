@@ -282,8 +282,15 @@ private fun managedJars(dir: File): List<File> =
         file.extension == "jar"
     }
 
-private fun sha256Hex(file: File): String =
-    MessageDigest
-        .getInstance("SHA-256")
-        .digest(file.readBytes())
-        .joinToString("") { "%02x".format(it) }
+private fun sha256Hex(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}

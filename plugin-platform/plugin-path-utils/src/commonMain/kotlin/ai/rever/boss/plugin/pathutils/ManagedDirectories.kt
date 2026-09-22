@@ -100,7 +100,12 @@ object ManagedDirectories {
                     null
                 }
             }.getOrNull() ?: return emptyList()
-        return dir
+        // List through the validated real path, not the caller's `dir`: if the
+        // directory path is swapped between the realRoot check above and the
+        // listing, the swap lands on a path we never validated. Each entry is
+        // still re-resolved by isContainedRegularFile before it is returned.
+        return realRoot
+            .toFile()
             .listFiles()
             ?.mapNotNull { file ->
                 if (!accept(file)) {
