@@ -124,7 +124,7 @@ export interface CompletedAuthenticationRecord {
 export async function storeCompletedAuthentication(
   supabase: SupabaseClient,
   record: CompletedAuthenticationRecord
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; code?: string }> {
   const row = {
     challenge: record.challenge,  // Required NOT NULL field
     session_id: record.sessionId,
@@ -161,14 +161,14 @@ export async function storeCompletedAuthentication(
 
     if (retry.error) {
       console.error('Failed to store completed authentication:', authFailureDetails(retry.error))
-      return { success: false, error: retry.error.message || retry.error.code }
+      return { success: false, error: retry.error.message || retry.error.code, code: retry.error.code ?? 'unknown' }
     }
 
     return { success: true }
   }
 
   console.error('Failed to store completed authentication:', authFailureDetails(error))
-  return { success: false, error: error.message || error.code }
+  return { success: false, error: error.message || error.code, code: error.code ?? 'unknown' }
 }
 
 /**

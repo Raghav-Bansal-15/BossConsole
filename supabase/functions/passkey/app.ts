@@ -74,7 +74,7 @@ app.doc("/openapi", {
   info: {
     title: "BOSS Passkey API",
     version: "1.0.0",
-    description: "WebAuthn authentication API for BOSS application"
+    description: "WebAuthn/Passkey authentication API for BOSS application"
   },
   servers: [
     {
@@ -93,7 +93,7 @@ app.doc("/openapi", {
     },
     {
       name: "Registration",
-      description: "WebAuthn registration endpoints"
+      description: "Passkey registration endpoints"
     },
     {
       name: "Management",

@@ -24,3 +24,14 @@ export function passkeyClient(): SupabaseClient {
 export function setPasskeyClientForTests(client: SupabaseClient | null): void {
   testClient = client
 }
+
+/**
+ * Drops both the test stub and any cached production client, so a test that
+ * depends on the lazy first-creation path (e.g. throwing from Deno.env.get)
+ * does not depend on module-instance ordering within the shared deno test
+ * process.
+ */
+export function resetPasskeyClientForTests(): void {
+  testClient = null
+  productionClient = null
+}

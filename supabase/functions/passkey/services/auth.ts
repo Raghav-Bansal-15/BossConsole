@@ -114,7 +114,9 @@ export const generateAuthChallenge = withErrorHandler(
     })
 
     if (!storeResult.success) {
-      console.error('Failed to store challenge:', authFailureDetails({ code: storeResult.code, message: storeResult.error }))
+      // Log by code only; the raw message never crosses this boundary (the
+      // helper drops it today, but the call should not hand it over anyway).
+      console.error('Failed to store challenge:', authFailureDetails({ code: storeResult.code }))
       // Inert, not a distinguishable failure (review follow-up): a
       // success:false here is reachable only for an enrolled account (we got
       // past the passkey lookup), which inverts the oracle - a prober learns
@@ -394,10 +396,14 @@ export const completeAuthentication = withErrorHandler(
         // The challenge is already consumed at this point, so the client has to
         // start a new ceremony rather than retry this one. That is the safe
         // direction: never leave a used challenge live to keep a retry cheap.
-        console.error('❌ Failed to store completed authentication:', authFailureDetails(storeResult.error))
+        console.error('❌ Failed to store completed authentication:', authFailureDetails({ code: storeResult.code }))
         return {
           success: false,
-          error: `Failed to store authentication result: ${storeResult.error || 'Unknown error'}`
+          // The raw database message stays server-side (redacted in the log
+          // above). auth/complete has no caller authentication - possession of
+          // a live challenge is the only gate - so the 400 body carries the
+          // allowlisted code and nothing else.
+          error: `Failed to store authentication result (${authFailureDetails({ code: storeResult.code }).code ?? 'unknown'})`
         }
       }
 
