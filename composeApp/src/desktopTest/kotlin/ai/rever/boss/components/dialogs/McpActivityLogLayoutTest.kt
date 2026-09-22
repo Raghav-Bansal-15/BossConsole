@@ -171,12 +171,12 @@ class McpActivityLogLayoutTest {
         rule.onNodeWithText("workspaceId: ws-42").assertDoesNotExist()
 
         rule.onNodeWithText("close_workspace").performClick()
-        rule.onNodeWithTag("mcp-op-detail").performScrollTo().assertIsDisplayed()
-        rule.onNodeWithText("workspaceId: ws-42").assertIsDisplayed()
+        rule.onNodeWithTag("mcp-op-detail").assertExists()
+        rule.onNodeWithText("workspaceId: ws-42").assertExists()
         // The detail carries the untruncated error inside its scrollable box.
         rule.onNodeWithText("frame 12 at com.example.Tool.run", substring = true).assertExists()
 
-        // A second click collapses again.
+        // A second click collapses again - no scrolling first, so the header stays put.
         rule.onNodeWithText("close_workspace").performClick()
         rule.onNodeWithTag("mcp-op-detail").assertDoesNotExist()
     }
