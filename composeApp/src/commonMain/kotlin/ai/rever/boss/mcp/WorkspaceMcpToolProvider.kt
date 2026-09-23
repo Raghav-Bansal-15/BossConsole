@@ -13,6 +13,7 @@ import ai.rever.boss.components.workspaces.WorkspaceSerializer
 import ai.rever.boss.components.workspaces.applyWorkspace
 import ai.rever.boss.components.workspaces.awaitTabTypes
 import ai.rever.boss.components.workspaces.isSpaceSlot
+import ai.rever.boss.components.workspaces.withStableId
 import ai.rever.boss.components.workspaces.workspaceManager
 import ai.rever.boss.dashboard.DashboardStatsManager
 import ai.rever.boss.plugin.api.McpToolArgs
@@ -35,10 +36,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -462,7 +460,10 @@ object WorkspaceMcpToolProvider : McpToolProvider {
             val file = File(workspacePath)
             if (file.exists() && file.canRead()) {
                 val content = withContext(Dispatchers.IO) { file.readText() }
-                workspace = runCatching { WorkspaceSerializer.deserialize(content) }.getOrNull()
+                // Agent-authored JSON commonly carries no id: mint one here too, or the
+                // blank id flows into the applier, which keys the preserved tree under a
+                // throwaway one.
+                workspace = runCatching { WorkspaceSerializer.deserialize(content) }.getOrNull()?.withStableId()
             } else if (!createIfAbsent) {
                 return McpToolResult("Workspace file not found: $workspacePath", isError = true)
             }
@@ -482,7 +483,7 @@ object WorkspaceMcpToolProvider : McpToolProvider {
                     } else {
                         WorkspaceFileManagerCommon.fileNameForId(workspaceId)
                     }
-                workspace = fileManager.loadWorkspace(fileName)
+                workspace = fileManager.loadWorkspace(fileName)?.withStableId()
             }
         }
 

@@ -112,7 +112,7 @@ class IdlessWorkspaceImportTest {
     }
 
     @Test
-    fun `the file literally named dot-json is never written and never listed`() {
+    fun `the file literally named dot-json is never written but a legacy one is adopted`() {
         val (fileManager, dir) = tempFileManager()
         val idless = space("", "Idless", layout("x"))
 
@@ -122,12 +122,27 @@ class IdlessWorkspaceImportTest {
         assertNull(fileManager.saveWorkspaceBlocking(idless, ".json"))
         assertFalse(File(dir, ".json").exists())
 
-        // And one left behind by an older build is not resurrected into the picker.
+        // One left behind by an older build IS listed - that file is a real Space (the last
+        // id-less import), and filtering it out would orphan it silently. The load scan's
+        // adoption, reproduced here: mint a stable id, save under <id>.json, remove the
+        // nameless file.
         File(dir, ".json").writeText(WorkspaceSerializer.serialize(idless))
-        assertTrue(
-            runBlocking { fileManager.listWorkspaces() }.none { it.fileName == ".json" },
-            "a nameless file is not a Space file",
-        )
+        val listed = runBlocking { fileManager.listWorkspaces() }.single { it.fileName == ".json" }
+        val legacy = runBlocking { fileManager.loadWorkspace(listed.fileName) }!!.withStableId()
+        val adoptedName = WorkspaceFileManagerCommon.fileNameForId(legacy.id)
+        assertNotNull(fileManager.saveWorkspaceBlocking(legacy, adoptedName))
+        assertTrue(runBlocking { fileManager.deleteWorkspace(".json") })
+
+        val after = reload(fileManager)
+        assertEquals(listOf(legacy.id), after.map { it.id }, "the adopted Space survives under its minted id")
+        assertFalse(File(dir, ".json").exists(), "the nameless file is gone after adoption")
         dir.deleteRecursively()
+    }
+
+    @Test
+    fun `the random suffix, not the clock, keeps same-millisecond mints distinct`() {
+        val ids = (1..1000).map { mintWorkspaceId() }.toSet()
+        assertEquals(1000, ids.size, "every mint is unique even inside one millisecond")
+        assertTrue(ids.none { it.contains("--") }, "no negative-hex double hyphen")
     }
 }

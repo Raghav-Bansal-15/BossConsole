@@ -131,10 +131,12 @@ actual class WorkspaceFileManager actual constructor(
 
                 dir
                     .listFiles { file ->
-                        // ".json" has no stem: it is what a blank id writes, not a Space file,
-                        // and nothing produces it any more. One left by an older build is not
-                        // resurrected into the list.
-                        file.isFile && file.name.endsWith(".json") && file.name != ".json"
+                        // ".json" has no stem: it is what a blank id wrote on older builds, and
+                        // nothing produces it any more. It is still LISTED - that file is a
+                        // real Space (the last id-less import), and the load scan adopts it:
+                        // mints a stable id, saves under <id>.json, and removes the nameless
+                        // file. Filtering it here would orphan that Space silently.
+                        file.isFile && file.name.endsWith(".json")
                     }?.map { file ->
                         WorkspaceFileInfo(
                             fileName = file.name,

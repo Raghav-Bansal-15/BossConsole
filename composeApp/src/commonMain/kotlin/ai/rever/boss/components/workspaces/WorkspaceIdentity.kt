@@ -17,7 +17,7 @@ import kotlin.time.Clock
  */
 internal fun mintWorkspaceId(): String {
     val timestamp = Clock.System.now().toEpochMilliseconds()
-    return "workspace-$timestamp-${Random.nextLong().toString(16)}"
+    return "workspace-$timestamp-${Random.nextLong().toULong().toString(16)}"
 }
 
 /**
