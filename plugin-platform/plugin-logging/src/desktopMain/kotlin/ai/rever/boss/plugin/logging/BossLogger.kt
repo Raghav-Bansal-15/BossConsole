@@ -546,7 +546,12 @@ object BossLogger {
                                 .sanitizeStackTrace(entry.error.stackTraceToString())
                                 .lines()
                         append("\n  Exception: ${traceLines.firstOrNull() ?: ""}")
-                        val frames = if (stackTraceDepth <= 0) traceLines.drop(1) else traceLines.drop(1).take(stackTraceDepth)
+                        val frames =
+                            if (stackTraceDepth <= 0) {
+                                traceLines.drop(1)
+                            } else {
+                                traceLines.drop(1).take(stackTraceDepth)
+                            }
                         frames.forEach { frame ->
                             append("\n    ${frame.trim()}")
                         }

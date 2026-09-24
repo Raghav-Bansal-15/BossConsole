@@ -3,7 +3,6 @@ package ai.rever.boss.services.supabase
 import ai.rever.boss.plugin.logging.LogSanitizer
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
-import ai.rever.boss.utils.logging.LogSanitizer
 import io.github.jan.supabase.logging.LogLevel
 import io.github.jan.supabase.logging.SupabaseLoggingProcessor
 
