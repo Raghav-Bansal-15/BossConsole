@@ -32,6 +32,7 @@ class LocalPluginRepositoryScanTest {
         fileName: String,
         pluginId: String,
         version: String = "1.0.0",
+        payloadBytes: Int = 0,
     ): File {
         val jar = File(dir, fileName)
         JarOutputStream(jar.outputStream()).use { out ->
@@ -49,6 +50,11 @@ class LocalPluginRepositoryScanTest {
                 """.trimIndent().toByteArray(),
             )
             out.closeEntry()
+            if (payloadBytes > 0) {
+                out.putNextEntry(JarEntry("payload.bin"))
+                out.write(ByteArray(payloadBytes) { (it % 251).toByte() })
+                out.closeEntry()
+            }
         }
         return jar
     }
@@ -135,5 +141,25 @@ class LocalPluginRepositoryScanTest {
             val copied = assertNotNull(result.getOrNull())
             assertEquals(target.absolutePath, copied)
             assertTrue(target.exists())
+        }
+
+    @Test
+    fun `downloadPlugin verifies a jar larger than the digest buffer`() =
+        runTest {
+            val dir = pluginDir()
+            // Well past the 64 KB streaming buffer in sha256Hex: the copy check
+            // only passes if the digest is computed across buffer boundaries.
+            val source = manifestJar(dir, "big-1.0.0.jar", "ai.rever.test.big", payloadBytes = 200 * 1024)
+            val target = File(temporary, "big-copied.jar")
+
+            val result =
+                LocalPluginRepository(dir)
+                    .downloadPlugin("ai.rever.test.big", null, target.absolutePath)
+
+            assertTrue(result.isSuccess)
+            assertTrue(
+                source.readBytes().contentEquals(target.readBytes()),
+                "a verified copy is byte-identical to its source",
+            )
         }
 }
