@@ -344,24 +344,33 @@ private fun decodeBase64Args(base64Payload: String): String? {
 }
 
 /**
- * Builds the line [parseRequestLine] reads, or null when [url] cannot occupy one
- * line safely. Never log the result: it carries the token.
+ * Whether [url] can occupy one framed [VERB_OPEN] line.
  *
  * The framing is `\n`-delimited, so a URL containing a raw newline or carriage
  * return would smuggle a second line into the stream. Rejecting is the safe
  * answer — a legitimate URL is already percent-encoded, so refusing control
  * characters loses no real link. The byte cap bounds what the framing writes
  * into a single request.
+ *
+ * The answer does not depend on the channel token, so a caller can check before
+ * it has even read the descriptor — e.g. to keep a refused URL out of a retry
+ * loop it could never pass.
+ */
+internal fun canFrameOpenUrl(url: String): Boolean =
+    url.isNotBlank() &&
+        url.none { it.isISOControl() } &&
+        url.toByteArray(StandardCharsets.UTF_8).size <= MAX_FORWARD_URL_BYTES
+
+/**
+ * Builds the line [parseRequestLine] reads, or null when [canFrameOpenUrl]
+ * refuses [url]. Never log the result: it carries the token.
  */
 internal fun formatOpenRequest(
     token: String,
     origin: DeepLinkOrigin,
     url: String,
 ): String? {
-    if (url.isBlank() ||
-        url.any { it.isISOControl() } ||
-        url.toByteArray(StandardCharsets.UTF_8).size > MAX_FORWARD_URL_BYTES
-    ) {
+    if (!canFrameOpenUrl(url)) {
         return null
     }
     return "$PROTOCOL_VERSION $token $VERB_OPEN ${origin.name} $url"
@@ -1550,6 +1559,12 @@ object SingleInstanceManager {
      *   run. A refused action, an unregistered handler on the operator path, or an
      *   unknown outcome at timeout returns false. This is not a guarantee that
      *   asynchronous work started by a handler has completed.
+     *
+     *   False also covers two cases a caller may want to tell apart: a URL
+     *   [canFrameOpenUrl] refuses is rejected before any connection attempt,
+     *   while any other false means the running instance could not be reached
+     *   or did not accept. A retrying caller can check [canFrameOpenUrl] once,
+     *   up front, to keep a refusal out of a retry loop it could never pass.
      */
     @Suppress("ReturnCount")
     fun sendToExistingInstance(
