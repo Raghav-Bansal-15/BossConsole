@@ -338,7 +338,10 @@ class McpOperationLedger(
             var currentLength = if (file.exists()) file.length() else 0L
             for (item in batch) {
                 when (item) {
-                    is LedgerWork.FlushMarker -> Unit
+                    is LedgerWork.FlushMarker -> {
+                        Unit
+                    }
+
                     is LedgerWork.PendingRecord -> {
                         // The hash link is computed here, at append time, chained to the tail
                         // that is actually on disk - never on the caller, ahead of the queue.

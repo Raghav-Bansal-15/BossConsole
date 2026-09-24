@@ -266,7 +266,8 @@ private fun McpOperationMetaRow(
                     },
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
-                color = if (persistenceState == McpPersistenceState.NOT_PERSISTED) colors.alert else colors.textSecondary,
+                color =
+                    if (persistenceState == McpPersistenceState.NOT_PERSISTED) colors.alert else colors.textSecondary,
             )
         }
         Text(
