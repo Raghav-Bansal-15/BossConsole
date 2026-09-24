@@ -130,10 +130,11 @@ class LocalPluginRepositoryBoundedReadTest {
 
         val path = LocalPluginRepository(pluginDir).getJarPath("com.example.local.bounded")
 
-        // The returned path is resolved through the managed root's real path,
-        // so compare canonical paths - the temp dir may itself sit behind a
-        // symlink (/var on macOS resolves to /private/var).
-        assertEquals(jar.canonicalPath, path)
+        // The returned path is caller-namespace (the managed scan lists through
+        // the real root but hands back File(dir, name)), so compare absolute
+        // paths - canonicalPath would resolve 8.3 short names on Windows and
+        // /var on macOS that the caller never sees.
+        assertEquals(jar.absolutePath, path)
     }
 
     @Test
