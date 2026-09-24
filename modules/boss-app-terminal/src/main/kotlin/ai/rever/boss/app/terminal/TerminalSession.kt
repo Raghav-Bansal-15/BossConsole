@@ -235,7 +235,7 @@ internal class TerminalSession(
             require(request.commandList.all { '\u0000' !in it })
             require(
                 request.environmentMap.all { (name, value) ->
-                    name.isNotEmpty() && '=' !in name && '\u0000' !in value
+                    name.isNotEmpty() && '=' !in name && '\u0000' !in name && '\u0000' !in value
                 },
             )
         }
