@@ -82,6 +82,10 @@ object ManagedDirectories {
      * silently loaded. An unsafe [dir] (missing, a symlink, or not a
      * directory) yields an empty list rather than an exception, matching
      * `listFiles`'s "no entries" contract.
+     *
+     * Matching `listFiles` again: entries come back under [dir]'s own path,
+     * not the resolved real root, so callers can compare them against paths
+     * they built from [dir] itself.
      */
     fun listContainedRegularFiles(
         dir: File,
@@ -111,7 +115,15 @@ object ManagedDirectories {
                 if (!accept(file)) {
                     null
                 } else if (isContainedRegularFile(file, realRoot)) {
-                    file
+                    // Return the entry under the caller's `dir`, not realRoot:
+                    // `dir` was validated non-symlink above so both name the
+                    // same file, and callers compare the result against paths
+                    // they built from `dir` (File equality and absolutePath in
+                    // installed.json, keep-sets, persisted jarPath). A
+                    // realRoot-rooted File breaks every one of those wherever
+                    // `dir`'s path is not canonical - an 8.3 short name on
+                    // Windows, /var on macOS, any symlinked ancestor.
+                    File(dir, file.name)
                 } else {
                     logger.warning(
                         "Skipping a managed-directory entry that is not a contained regular file: " +

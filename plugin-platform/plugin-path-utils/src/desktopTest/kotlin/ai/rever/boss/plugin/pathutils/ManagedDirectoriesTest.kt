@@ -59,8 +59,8 @@ class ManagedDirectoriesTest {
 
         val jars = ManagedDirectories.listContainedRegularFiles(dir) { it.extension == "jar" }
 
-        // Entries come back under the resolved real root: compare canonical
-        // paths because the temp dir itself may sit behind a symlink (/var on
+        // Entries come back under the caller's `dir`; compare canonical paths
+        // anyway because the temp dir itself may sit behind a symlink (/var on
         // macOS resolves to /private/var).
         assertEquals(listOf(jar.canonicalPath), jars.map { it.canonicalPath })
     }
