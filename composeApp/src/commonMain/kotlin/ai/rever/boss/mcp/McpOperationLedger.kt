@@ -7,8 +7,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFileAttributeView
@@ -18,6 +20,7 @@ import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
@@ -30,20 +33,36 @@ import kotlin.concurrent.thread
  *
  * Each persisted record also carries a [McpOperationRecord.hash] chained to the record before it, so
  * the durable file is tamper-evident and not merely append-only - see [McpLedgerChain] and
- * [verifyChain]. [recentOperations] mirrors what was chained; a pending write the bounded queue
- * drops still appears there, and the gap it leaves on disk is what [verifyChain] is for.
+ * [verifyChain]. The chain is assigned on the writer thread at append time, so a record that never
+ * reaches disk simply never enters the chain and cannot read as a broken link: [recentOperations]
+ * holds the unhashed draft until the write lands and then swaps in the chained copy, while
+ * [pendingWriteIds] and [droppedWrites] keep the queued and the lost distinguishable from the
+ * persisted.
  *
  * Scope note: Tool discovery, RBAC permissions, and kill-switch blocks are enforced upstream
  * in tool resolution; unpermitted or unregistered tool calls are blocked before reaching
  * policy checks and the operation ledger.
  */
-@Suppress("TooManyFunctions") // Record, async writer, rotation, and read/verify form one audit boundary.
+// Record, async writer, rotation, and read/verify form one audit boundary; the constructor
+// mirrors the persisted-file knobs plus two test seams.
+@Suppress("TooManyFunctions", "LongParameterList")
 class McpOperationLedger(
     private val ledgerFile: File? = null,
     private val maxFileSizeBytes: Long = 10L * 1024 * 1024, // 10 MB
     private val maxBackupIndex: Int = 5,
     private val ringBufferCapacity: Int = 100,
     private val maxPendingWrites: Int = 8192,
+    /**
+     * Test seam: invoked once on the writer thread before it starts draining, so a test can
+     * hold the writer while callers pile records into [writeQueue]. A constructor parameter
+     * rather than a mutable property so it cannot be swapped in while the writer runs.
+     */
+    internal val writeGate: () -> Unit = {},
+    /**
+     * Test seam: invoked in [appendStaged] just before the bytes hit the file, so a test can
+     * fail a batch deterministically and prove the on-disk chain stays contiguous.
+     */
+    internal val writeFailureProbe: (File) -> Unit = {},
 ) {
     /** The actual optional persistence destination, for operator-facing inspection. */
     val persistencePath: String? get() = ledgerFile?.absolutePath
@@ -51,45 +70,60 @@ class McpOperationLedger(
     private val logger = BossLogger.forComponent("McpOperationLedger")
 
     /**
-     * Guards chain-head recovery, hash linking and the queue offer, so write-queue order always
-     * equals chain order. Nothing under this lock touches the filesystem except the one-time
-     * [McpLedgerStore.lastChainHead] recovery read.
+     * Serializes the queue offer against the telemetry updates, so write-queue order always
+     * equals [recentOperations] order under concurrent callers. Nothing under this lock
+     * touches the filesystem: hashing moved to the writer thread, so record() never blocks
+     * a caller on disk at all.
      */
     private val writeLock = Any()
     private val json = Json { ignoreUnknownKeys = true }
     private val store = McpLedgerStore(ledgerFile)
 
     /**
-     * Records waiting for the writer thread. Bounded on purpose: a flood of invokes must drop
-     * pending audit writes (counted in [droppedWriteCount], and visible to [verifyChain] as a
-     * gap in the chain) rather than queue unbounded work or serialize the invoking coroutine
-     * behind the filesystem.
+     * Work waiting for the writer thread. Bounded on purpose: a flood of invokes must drop
+     * pending audit writes (counted in [droppedWrites] and logged, rate-limited) rather than
+     * queue unbounded work or serialize the invoking coroutine behind the filesystem.
      */
-    private val writeQueue = ArrayBlockingQueue<Any>(maxPendingWrites)
+    private val writeQueue = ArrayBlockingQueue<LedgerWork>(maxPendingWrites)
 
-    private val droppedWrites = AtomicLong(0)
+    private val _droppedWrites = MutableStateFlow(0L)
 
-    /** Pending records discarded because [writeQueue] was full. */
+    /**
+     * Audit records that never reached disk: refused by a full [writeQueue], or staged in a
+     * batch whose append failed. Public because the activity dialog is where an operator
+     * finds out the journal lost entries.
+     */
+    val droppedWrites: StateFlow<Long> = _droppedWrites.asStateFlow()
+
+    /** Pending records discarded because [writeQueue] was full or their batch failed to append. */
     internal val droppedWriteCount: Long
-        get() = droppedWrites.get()
+        get() = _droppedWrites.value
+
+    /**
+     * Ids of records handed to the writer but not yet confirmed on disk. A record in
+     * [recentOperations] with `hash == null` is either here (still queued) or lost
+     * (already counted in [droppedWrites]) - the distinction the activity dialog renders.
+     */
+    private val _pendingWriteIds = MutableStateFlow<Set<String>>(emptySet())
+    val pendingWriteIds: StateFlow<Set<String>> = _pendingWriteIds.asStateFlow()
+
+    /** Rate-limit state for the queue-full warning: a flood must not flood the log. */
+    private val lastDropWarningAtMs = AtomicLong(Long.MIN_VALUE)
 
     @Volatile
     private var writerThread: Thread? = null
 
-    /**
-     * Test seam: invoked once on the writer thread before it starts draining, so a test can
-     * hold the writer while callers pile records into [writeQueue].
-     */
-    @Volatile
-    internal var writeGate: (() -> Unit)? = null
+    /** The [writeGate] runs once per ledger, not once per writer thread start. */
+    private val writeGateConsumed = AtomicBoolean(false)
 
     /**
-     * The hash the next persisted record chains to, recovered from the newest record already on
-     * disk the first time this process writes. Without that recovery a restart would begin a
-     * second chain, and every record written after it would read as a break.
+     * The hash the next appended record chains to, owned by the writer thread. `null` means
+     * "recover from the disk tail": the first batch of the process, and every batch after a
+     * failed append, re-reads the newest record actually on disk via
+     * [McpLedgerStore.lastChainHead]. That is what makes contiguity hold by construction -
+     * a staged record whose write fails can never become the missing parent of a later one.
      */
-    private var chainHead: String = McpLedgerChain.GENESIS_HASH
-    private var chainHeadRecovered = false
+    private var writerChainHead: String? = null
 
     private val _recentOperations = MutableStateFlow<List<McpOperationRecord>>(emptyList())
     val recentOperations: StateFlow<List<McpOperationRecord>> = _recentOperations.asStateFlow()
@@ -103,6 +137,11 @@ class McpOperationLedger(
     /**
      * Record a tool execution, rejection, or timeout.
      * Never throws - I/O failures are logged without disrupting tool return.
+     *
+     * Returns the pending draft (`hash == null`): persistence is asynchronous and the chain
+     * link is assigned on the writer thread, so no hash exists to return yet. The chained
+     * copy replaces the draft in [recentOperations] once the record is on disk; until then
+     * its id sits in [pendingWriteIds].
      */
     @Suppress("LongParameterList") // One complete audit record, matching the persisted schema.
     fun record(
@@ -131,23 +170,33 @@ class McpOperationLedger(
                 errorSnippet = sanitizedErrorSnippet,
             )
 
-        // 1. Chain and enqueue under one lock so queue order always equals chain order. The
-        //    invoking coroutine used to do encode + mkdirs + stat + appendText here, serialized
-        //    behind the filesystem; now only the hash link (memory) and one recovery read
-        //    (once per process) happen on it - the writer thread does the file work.
+        // Under one lock so queue order always equals ring-buffer order. What does NOT
+        // happen here is hashing: the chain is assigned on the writer thread at append
+        // time, so the returned draft carries no hash and a write that never lands can
+        // never become a missing link in the on-disk chain. The pending id goes in BEFORE
+        // the offer - the writer can only see the record through the queue, so it can
+        // never mark an id persisted before it was marked pending.
         return synchronized(writeLock) {
-            val record = chainAndEnqueue(draft)
+            if (ledgerFile != null) {
+                ensureWriter()
+                _pendingWriteIds.update { it + draft.id }
+                if (!writeQueue.offer(LedgerWork.PendingRecord(draft))) {
+                    _pendingWriteIds.update { it - draft.id }
+                    noteQueueDrop()
+                }
+            }
 
-            // 2. Update in-memory telemetry ring buffer
+            // The ring buffer gets the draft now; the writer swaps in the chained copy
+            // once the record is actually on disk (see markPersisted).
             _recentOperations.update { current ->
-                (listOf(record) + current).take(ringBufferCapacity)
+                (listOf(draft) + current).take(ringBufferCapacity)
             }
             _totalCalls.update { it + 1 }
             if (isError) {
                 _totalErrors.update { it + 1 }
             }
 
-            record
+            draft
         }
     }
 
@@ -173,7 +222,10 @@ class McpOperationLedger(
      */
     internal fun awaitIdle(timeoutMs: Long = 5_000): Boolean {
         if (ledgerFile == null) return true
-        val flush = FlushRequest()
+        // Start the writer even when nothing has been recorded yet: a flush must drain,
+        // not burn its timeout waiting for a take() nobody will serve.
+        ensureWriter()
+        val flush = LedgerWork.FlushMarker()
         return try {
             writeQueue.offer(flush, timeoutMs, TimeUnit.MILLISECONDS) &&
                 flush.done.await(timeoutMs, TimeUnit.MILLISECONDS)
@@ -183,32 +235,53 @@ class McpOperationLedger(
     }
 
     /**
-     * Chains [draft] to the current head and queues it for the writer thread. Runs inside
-     * [writeLock], which is what keeps queue order equal to chain order under concurrent
-     * callers. The returned record carries its hash whether or not the write has landed yet -
-     * a write the queue drops or the writer fails leaves a gap [verifyChain] reports, which is
-     * the honest answer for an audit entry that never reached disk. The draft comes back
-     * unchanged when there is no ledger file.
+     * [awaitIdle] for process-shutdown paths: drains the queue with a bound and warns when
+     * the writer cannot keep up, rather than letting the JVM exit with queued audit records
+     * still in memory. Called before `BossLogger.shutdown()` so the timeout warning still
+     * has a log to land in.
      */
-    private fun chainAndEnqueue(draft: McpOperationRecord): McpOperationRecord {
-        if (ledgerFile == null) return draft
-        // Recovered before any write: rotation may rename the active file, and the record being
-        // written chains to what that file held a moment ago either way.
-        if (!chainHeadRecovered) {
-            chainHead = store.lastChainHead()
-            chainHeadRecovered = true
+    fun flush(timeoutMs: Long = 2_000): Boolean =
+        awaitIdle(timeoutMs).also { drained ->
+            if (!drained) {
+                logger.warn(
+                    LogCategory.SYSTEM,
+                    "MCP operation ledger did not drain in time - queued records may be lost",
+                    mapOf("timeoutMs" to timeoutMs),
+                )
+            }
         }
-        val chainedHash = McpLedgerChain.linkHash(chainHead, draft)
-        val chained = draft.copy(hash = chainedHash, parentHash = chainHead)
-        chainHead = chainedHash
-        enqueuePersist(chained)
-        return chained
+
+    /**
+     * One work item for the writer thread. Sealed so a third kind added later is a compile
+     * error in [writeBatch]'s `when`, not a record silently skipped by an `is` check.
+     */
+    private sealed interface LedgerWork {
+        /** A sanitized record awaiting its chain hash, which is assigned at append time. */
+        class PendingRecord(
+            val draft: McpOperationRecord,
+        ) : LedgerWork
+
+        /** Marker queued behind pending records so [awaitIdle] can tell when they are written. */
+        class FlushMarker : LedgerWork {
+            val done = CountDownLatch(1)
+        }
     }
 
-    private fun enqueuePersist(record: McpOperationRecord) {
-        ensureWriter()
-        if (!writeQueue.offer(record)) {
-            droppedWrites.incrementAndGet()
+    /**
+     * A record refused by a full [writeQueue]. Counted so the operator can see the loss, and
+     * warned about - rate-limited, because the flood that filled the queue would otherwise
+     * produce a warning per record.
+     */
+    private fun noteQueueDrop() {
+        val total = _droppedWrites.updateAndGet { it + 1 }
+        val now = System.currentTimeMillis()
+        val last = lastDropWarningAtMs.get()
+        if (now - last >= DROP_WARNING_INTERVAL_MS && lastDropWarningAtMs.compareAndSet(last, now)) {
+            logger.warn(
+                LogCategory.SYSTEM,
+                "MCP operation ledger queue is full - audit records are being dropped",
+                mapOf("droppedTotal" to total, "queueCapacity" to maxPendingWrites),
+            )
         }
     }
 
@@ -229,8 +302,13 @@ class McpOperationLedger(
      * than one syscall sequence per record. Runs alone, so the file needs no lock.
      */
     private fun writeLoop() {
-        writeGate?.invoke()
-        val batch = ArrayList<Any>(MAX_WRITE_BATCH)
+        if (writeGateConsumed.compareAndSet(false, true)) {
+            writeGate()
+        }
+        // A restarted writer inherits no head: recover it from the disk tail so it cannot
+        // chain to a hash whose record the previous writer may never have landed.
+        writerChainHead = null
+        val batch = ArrayList<LedgerWork>(MAX_WRITE_BATCH)
         while (true) {
             val first =
                 try {
@@ -245,56 +323,121 @@ class McpOperationLedger(
         }
     }
 
-    @Suppress("TooGenericExceptionCaught") // Audit failure must not change the already-completed tool result.
-    private fun writeBatch(batch: List<Any>) {
+    // Audit failure must not change the already-completed tool result; the batch loop nests
+    // because rotation is checked per record.
+    @Suppress("TooGenericExceptionCaught", "NestedBlockDepth")
+    private fun writeBatch(batch: List<LedgerWork>) {
         val file = ledgerFile ?: return releaseFlushes(batch)
+        val pendingChunk = ByteArrayOutputStream()
+        val staged = ArrayList<McpOperationRecord>(batch.size)
         try {
             file.parentFile?.mkdirs()
             // One stat per batch: the tracked length stands in for the per-record
             // exists()+length() checks the old synchronous writer did, so a batch that
             // crosses the size cap still rotates at the same record boundary it would have.
             var currentLength = if (file.exists()) file.length() else 0L
-            val pending = StringBuilder()
-            batch.forEach { item ->
-                if (item !is McpOperationRecord) return@forEach
-                val line = json.encodeToString(item) + "\n"
-                if (currentLength >= maxFileSizeBytes) {
-                    appendChunk(file, pending)
-                    pending.setLength(0)
-                    rotateIfNeeded(file)
-                    currentLength = 0
+            for (item in batch) {
+                when (item) {
+                    is LedgerWork.FlushMarker -> Unit
+                    is LedgerWork.PendingRecord -> {
+                        // The hash link is computed here, at append time, chained to the tail
+                        // that is actually on disk - never on the caller, ahead of the queue.
+                        // A record whose write then fails simply never enters the chain, so a
+                        // drop is lost coverage (counted in droppedWrites) rather than a
+                        // LINK_BROKEN verdict that reads like tampering and stops verification.
+                        val parent = writerChainHead ?: store.lastChainHead().also { writerChainHead = it }
+                        val chained =
+                            item.draft.copy(
+                                parentHash = parent,
+                                hash = McpLedgerChain.linkHash(parent, item.draft),
+                            )
+                        writerChainHead = chained.hash
+                        val line = (json.encodeToString(chained) + "\n").toByteArray(Charsets.UTF_8)
+                        if (currentLength >= maxFileSizeBytes) {
+                            appendStaged(file, pendingChunk, staged)
+                            rotateIfNeeded(file)
+                            // Re-stat rather than reset to 0: a failed rename leaves the
+                            // oversized file in place, and the next record must retry
+                            // rotation instead of growing it past the cap all batch.
+                            currentLength = if (file.exists()) file.length() else 0L
+                        }
+                        pendingChunk.write(line)
+                        staged += chained
+                        currentLength += line.size
+                    }
                 }
-                pending.append(line)
-                currentLength += line.toByteArray(Charsets.UTF_8).size
             }
-            appendChunk(file, pending)
+            appendStaged(file, pendingChunk, staged)
         } catch (t: Exception) {
+            // Whatever never reached disk - staged, mid-encode, or not yet processed -
+            // forget the in-memory head so the next batch re-chains from the real disk
+            // tail, and count the loss.
+            writerChainHead = null
+            val lost = noteBatchLost(batch)
             logger.warn(
                 LogCategory.SYSTEM,
                 "Failed to append records to MCP operation ledger",
-                mapOf("path" to file.path, "error" to (t.message ?: t::class.simpleName)),
+                mapOf(
+                    "path" to file.path,
+                    "recordsLost" to lost,
+                    "error" to (t.message ?: t::class.simpleName),
+                ),
             )
         } finally {
             releaseFlushes(batch)
         }
     }
 
-    private fun appendChunk(
+    /**
+     * One append for up to a whole batch of records. Correct under the single-writer
+     * contract; a second [McpOperationLedger] pointed at the same path (the CLI constructs
+     * its own instances) could interleave a torn chunk, where per-line writes would have
+     * interleaved whole lines instead - neither is supported, but the chunk makes the
+     * assumption visible.
+     */
+    private fun appendStaged(
         file: File,
-        pending: StringBuilder,
+        pendingChunk: ByteArrayOutputStream,
+        staged: MutableList<McpOperationRecord>,
     ) {
-        if (pending.isEmpty()) return
+        if (pendingChunk.size() == 0) return
         createOrRestrictToOwner(file)
-        file.appendText(pending.toString())
+        writeFailureProbe(file)
+        file.appendBytes(pendingChunk.toByteArray())
+        pendingChunk.reset()
+        markPersisted(staged)
+        staged.clear()
     }
 
-    private fun releaseFlushes(batch: List<Any>) {
-        batch.filterIsInstance<FlushRequest>().forEach { it.done.countDown() }
+    /**
+     * Swap each written draft in [recentOperations] for the chained copy now on disk, so the
+     * ring buffer mirrors exactly what was persisted rather than pre-hash drafts. Clearing
+     * the ids out of [pendingWriteIds] is what flips a dialog row from queued to persisted.
+     */
+    private fun markPersisted(staged: List<McpOperationRecord>) {
+        if (staged.isEmpty()) return
+        val byId = staged.associateBy { it.id }
+        _recentOperations.update { current -> current.map { byId[it.id] ?: it } }
+        _pendingWriteIds.update { it - byId.keys }
     }
 
-    /** Marker queued behind pending records so [awaitIdle] can tell when they are written. */
-    private class FlushRequest {
-        val done = CountDownLatch(1)
+    /**
+     * Batch records whose append failed - staged, mid-encode, or never reached by the loop:
+     * anything still in [pendingWriteIds] is lost by definition, because items already
+     * persisted were removed by [markPersisted]. They leave the pending set and join the
+     * dropped count, so a lost audit entry is a visible number, not a silent gap.
+     */
+    private fun noteBatchLost(batch: List<LedgerWork>): Int {
+        val batchIds = batch.filterIsInstance<LedgerWork.PendingRecord>().mapTo(mutableSetOf()) { it.draft.id }
+        val lost = _pendingWriteIds.value intersect batchIds
+        if (lost.isEmpty()) return 0
+        _pendingWriteIds.update { it - lost }
+        _droppedWrites.update { it + lost.size }
+        return lost.size
+    }
+
+    private fun releaseFlushes(batch: List<LedgerWork>) {
+        batch.filterIsInstance<LedgerWork.FlushMarker>().forEach { it.done.countDown() }
     }
 
     /**
@@ -393,6 +536,9 @@ class McpOperationLedger(
     private companion object {
         /** Records encoded and appended per writer pass, so bursts coalesce into one write. */
         const val MAX_WRITE_BATCH = 256
+
+        /** Minimum gap between queue-full warnings; drops in between are counted, not logged. */
+        const val DROP_WARNING_INTERVAL_MS = 30_000L
     }
 }
 
