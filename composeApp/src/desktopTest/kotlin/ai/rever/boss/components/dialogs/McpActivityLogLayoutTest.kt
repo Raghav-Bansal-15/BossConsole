@@ -181,6 +181,27 @@ class McpActivityLogLayoutTest {
         rule.onNodeWithTag("mcp-op-detail").assertDoesNotExist()
     }
 
+    @Test fun `an expanded row keeps its detail when a live call prepends`() {
+        // The list is live and newest-first: a call landing while the dialog is open
+        // prepends, and positional slot identity used to reset every row's remembered
+        // expansion state at its new index.
+        val op =
+            record("op-1").copy(
+                toolName = "close_workspace",
+                sanitizedArgs = mapOf("workspaceId" to "ws-42"),
+            )
+        val records = mutableStateOf(listOf(op))
+        show { McpActivityLogDialog(records.value, records.value.size.toLong(), 0, onDismiss = {}) }
+
+        rule.onNodeWithText("close_workspace").performClick()
+        rule.onNodeWithTag("mcp-op-detail").assertExists()
+
+        rule.runOnIdle { records.value = listOf(record("op-2"), op) }
+
+        rule.onNodeWithTag("mcp-op-detail").assertExists()
+        rule.onNodeWithText("workspaceId: ws-42").assertExists()
+    }
+
     @Test fun `narrow window keeps close horizontally inside the viewport`() {
         show(windowSize = IntSize(360, 360)) {
             McpActivityLogDialog(listOf(record("tool")), 1, 1, ledgerPath = "/actual/ledger.jsonl", onDismiss = {})

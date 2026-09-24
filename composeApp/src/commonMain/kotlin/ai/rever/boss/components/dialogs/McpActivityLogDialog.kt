@@ -29,6 +29,7 @@ import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -155,7 +156,10 @@ fun McpActivityLogDialog(
                                     .fillMaxWidth(),
                         ) {
                             operations.forEach { op ->
-                                McpOperationRow(op, timeFormat, colors)
+                                // recentOperations is live and newest-first, so a new call
+                                // prepends: without a stable key each row's remembered
+                                // expansion state resets at its new position.
+                                key(op.id) { McpOperationRow(op, timeFormat, colors) }
                             }
                         }
                     }
