@@ -177,6 +177,14 @@ class McpOperationLedger(
         // the offer - the writer can only see the record through the queue, so it can
         // never mark an id persisted before it was marked pending.
         return synchronized(writeLock) {
+            // The draft enters the ring buffer before the queue offer so the writer can
+            // never persist a record whose draft is not yet visible - markPersisted swaps
+            // by id, and a swap that ran before the draft landed would leave the unhashed
+            // draft behind as a phantom queued row.
+            _recentOperations.update { current ->
+                (listOf(draft) + current).take(ringBufferCapacity)
+            }
+
             if (ledgerFile != null) {
                 ensureWriter()
                 _pendingWriteIds.update { it + draft.id }
@@ -184,12 +192,6 @@ class McpOperationLedger(
                     _pendingWriteIds.update { it - draft.id }
                     noteQueueDrop()
                 }
-            }
-
-            // The ring buffer gets the draft now; the writer swaps in the chained copy
-            // once the record is actually on disk (see markPersisted).
-            _recentOperations.update { current ->
-                (listOf(draft) + current).take(ringBufferCapacity)
             }
             _totalCalls.update { it + 1 }
             if (isError) {
