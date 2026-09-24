@@ -15,9 +15,9 @@ import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.core.main
-import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import java.nio.charset.StandardCharsets
 
 /**
  * Result of early / headless CLI dispatch before GUI initialization.
